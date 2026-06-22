@@ -1,0 +1,40 @@
+dataset:
+    name: ag_news
+    path: data/ag_news
+    dim: 384
+    file: ag_news-384-euclidean.hdf5
+
+index:
+    type: ivfpq
+    nlist: 4096
+    m: 24          # 384 / 24 = 16 dims per sub-vector
+    nbits: 8
+    metric: L2
+
+execution:
+  search_param_configs:
+    - {nprobe: 8,  rerank_k: 50,  early_stop: false}
+    - {nprobe: 16, rerank_k: 100, early_stop: false}
+    - {nprobe: 32, rerank_k: 200, early_stop: false}
+    - {nprobe: 64, rerank_k: 400, early_stop: false}
+    - {nprobe: 128, rerank_k: 800, early_stop: false}
+
+pricing:
+  tiers: [0.001, 0.002, 0.005, 0.01, 0.02]
+
+cost_model:
+  base_per_ms: 0.00005
+  fixed_overhead: 0.0001
+
+shadow:
+  sample_rate: 0.02
+  exact_search_k_multiplier: 1.0
+
+logging:
+  output_dir: logs
+  flush_every_n: 100
+
+experiment:
+  seed: 42
+  n_queries: 1000
+  output_dir: runs
