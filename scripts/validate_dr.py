@@ -171,7 +171,11 @@ def main():
     # ── 2. 构造共享组件 ──
     diff_est = DifficultyEstimator(sample_vectors=xt[:5000])
     execution = ExecutionAgent(index, cfg["cost_model"])
-    buyer = BuyerSimulator(seed=seed)
+    buyer = BuyerSimulator(
+        seed=seed,
+        best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
+        worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
+    )
 
     z_configs = cfg["execution"]["search_param_configs"]
     price_tiers = cfg["pricing"]["tiers"]

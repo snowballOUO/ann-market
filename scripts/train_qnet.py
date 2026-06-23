@@ -1,6 +1,5 @@
 import os
 import glob
-import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,38 +10,29 @@ from src.models.q_net import LargeQNet, causal_dr_bellman_loss
 from src.models.distill import SmallQNet, distill_q_net
 
 def main():
+    from src.causal.dr_estimator import load_logs, build_state, build_action_index
+
     print("1. 正在寻找最新的历史日志...")
     log_dirs = sorted(glob.glob("logs/run_*"))
+    if not log_dirs:
+        raise FileNotFoundError("No log directories found under logs/")
     latest_log_dir = log_dirs[-1]
-    parquet_files = glob.glob(os.path.join(latest_log_dir, "*.parquet"))
-    
-    # 致命修复 1：加载日志并强制清洗所有 NaN 缺失值
-    df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
-    df = df.fillna(0.0) 
-    print(f"成功加载并清洗日志: {latest_log_dir}，共 {len(df)} 条轨迹。")
+
+    df = load_logs(latest_log_dir)  # 自动清洗 NaN 和 orphan 记录
+    print(f"成功加载日志: {latest_log_dir}，共 {len(df)} 条轨迹。")
 
     print("2. 正在提取 Causal 状态特征 (Deconfounding)...")
-    # 防御性读取，确保没有任何 NaN 流入张量
-    U_t = df["U_t"].values
-    budget = df.get("budget_t", pd.Series(np.ones(len(df)) * 0.01)).values
-    sla = df.get("sla_t", pd.Series(np.ones(len(df)) * 0.1)).values
-    propensities = np.clip(df["propensity"].values, 1e-4, 1.0) # 强制斩断趋于 0 的极小值
-    rewards = df["R_t"].values
-    
+    states = build_state(df).astype(np.float32)        # (N, 6) — 所有维度正确填充
+    actions = build_action_index(df).astype(np.int64)  # (N,)  — 真实日志动作
+    rewards = df["R_t"].values.astype(np.float32)
+    propensities = np.clip(df["propensity"].values, 1e-4, 1.0)
+
     n_actions = 25
-    state_dim = 8
-    
-    states = np.zeros((len(df), state_dim), dtype=np.float32)
-    states[:, 0] = U_t
-    states[:, 3] = sla
-    states[:, 4] = budget
+    state_dim = states.shape[1]  # 6
 
-    # 随机动作占位（仅为跑通流水线）
-    actions = np.random.randint(0, n_actions, size=len(df)) 
-
-    # 致命修复 2：真实系统中的 next_state 应该是时间序列上的下一条日志
-    next_states = np.roll(states, shift=-1, axis=0)
-    next_states[-1] = np.zeros(state_dim) # 最后一个查询无后续，设为终止态
+    # next_state: i → i+1（离线 RL 标准做法），最后一条为终止态
+    next_states = np.zeros_like(states, dtype=np.float32)
+    next_states[:-1] = states[1:]
 
     states_t = torch.tensor(states, dtype=torch.float32)
     actions_t = torch.tensor(actions, dtype=torch.long)
@@ -78,7 +68,8 @@ def main():
 
     print("4. 正在蒸馏为 SmallQNet (Hidden=32) 并导出 TorchScript...")
     small_q = SmallQNet(state_dim, n_actions)
-    distill_q_net(large_q, small_q, DataLoader(states_t, batch_size=256), epochs=5)
+    distill_q_net(large_q, small_q, DataLoader(states_t, batch_size=256),
+                   state_dim=state_dim, epochs=5)
     
     os.makedirs("models", exist_ok=True)
     dummy_input = torch.randn(1, state_dim)

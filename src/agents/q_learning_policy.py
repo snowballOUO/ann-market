@@ -33,23 +33,30 @@ class QLearningPolicy:
         """
         构造状态向量。必须包含 U_t 以完成混淆消除 (Deconfounding)。
         直接返回纯 NumPy 数组，彻底摆脱 PyTorch 开销。
+        6 维特征，与 LinUCB._build_features() 和 dr_estimator.build_state() 完全一致。
         """
         # 解析复杂的标量过滤条件
-        filter_ratio = 1.0
-        if query.filter_t:
-            raw_val = query.filter_t.get("filter_ratio_token", "")
-            if isinstance(raw_val, str) and "pct" in raw_val:
-                filter_ratio = float(raw_val.replace("p", ".").replace("pct", ""))
+        # filter_ratio = 1.0
+        # if query.filter_t:
+        #     raw_val = query.filter_t.get("filter_ratio_token", "")
+        #     if isinstance(raw_val, str) and "pct" in raw_val:
+        #         filter_ratio = float(raw_val.replace("p", ".").replace("pct", ""))
 
         state_features = [
-            U_t,                        # [极其关键] W4 训练的精确难度评估
-            float(np.linalg.norm(query.v_t)),
-            query.k_t / 100.0,
-            query.sla_t,
-            query.budget_t,
-            filter_ratio,
-            h_t.get("recent_accept_rate", 0.5),
-            h_t.get("recent_mean_latency", 0.05)
+            # U_t,                        # [极其关键] W4 训练的精确难度评估
+            # float(np.linalg.norm(query.v_t)),
+            # query.k_t / 100.0,
+            # query.sla_t,
+            # query.budget_t,
+            # filter_ratio,
+            # h_t.get("recent_accept_rate", 0.5),
+            # h_t.get("recent_mean_latency", 0.05)
+            U_t,                                          # [0] 查询难度
+            h_t.get("recent_accept_rate", 0.5),           # [1] 近期接受率
+            h_t.get("recent_mean_latency", 0.0) * 1000,   # [2] 近期延迟 (ms)
+            query.k_t / 100.0,                            # [3] 请求 k [0.1, 1.0]
+            query.sla_t * 1000,                           # [4] SLA (ms)
+            query.budget_t * 1000,                        # [5] 预算 (毫美元)
         ]
         
         # 直接返回 float32 的 numpy array，并加上 batch_size=1 的维度
