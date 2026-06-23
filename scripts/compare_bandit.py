@@ -1,11 +1,12 @@
 """
-W3 comparison: FixedPolicy (W1 baseline) vs LinUCB (W3).
+W3+W6 comparison: FixedPolicy vs LinUCB vs Distilled Q-Net.
 
-Runs both policies on identical query/buyer sequences.
+Runs policies on identical query/buyer sequences.
 Plots cumulative revenue curves.
 
 Usage:
     python scripts/compare_bandit.py --config configs/base.yaml --n-queries 10000
+    python scripts/compare_bandit.py --config configs/base.yaml --policies fixed,linucb,qnet
 """
 import argparse
 import os
@@ -19,9 +20,11 @@ import faiss
 from tqdm import tqdm
 
 from src.data.datasets import load_sift1m, load_hdf5
+from src.data.buyer_simulator import BuyerSimulator
 from src.agents.difficulty_estimator import DifficultyEstimator, MLPDifficultyEstimator
-from src.agents.policy_agent import FixedPolicy  # W1 baseline
-from src.agents.bandit_policy import LinUCBPolicy  # W3 new
+from src.agents.policy_agent import FixedPolicy
+from src.agents.bandit_policy import LinUCBPolicy
+from src.agents.q_learning_policy import QLearningPolicy
 from src.agents.execution_agent import ExecutionAgent
 from src.agents.shadow_sampler import ShadowSampler
 from src.system.context_cache import ContextCache
@@ -31,7 +34,6 @@ from src.system.types import Query
 
 
 def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
-    """Identical to run_experiment.py's build_query."""
     k = int(rng.choice([10, 20, 50, 100]))
     sla = float(rng.choice([0.020, 0.050, 0.100]))
     budget = float(rng.choice([0.005, 0.010, 0.020]))
@@ -46,18 +48,7 @@ def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
 
 
 def run_policy(policy, orch, buyer, xq, n_queries, seed):
-    """
-    用指定 policy 跑 n_queries 条查询。
-
-    关键设计：buyer 的随机决策在两组实验里必须一致。
-    做法：每个 query i 用 buyer_rng = np.random.default_rng(seed + i)
-    来播种，保证两组实验的 buyer 产生相同的随机数序列。
-
-    Returns:
-        cumulative:  每条查询后的累计收益 (shape n_queries,)
-        accept_rate: 最终接受率
-        total_rev:   累计总收入
-    """
+    """Run N queries, return cumulative revenue, accept rate, total revenue."""
     rng = np.random.default_rng(seed)
     n_qv = xq.shape[0]
     cumulative = np.zeros(n_queries)
@@ -68,7 +59,6 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed):
         v = xq[i % n_qv]
         q = build_query(i, v, rng)
 
-        # 重置 buyer 状态（两组实验同一个查询的 buyer 行为一致）
         buyer.rng = np.random.default_rng(seed + i)
         if hasattr(buyer, 'market_sentiment'):
             buyer.market_sentiment = 0.8
@@ -84,6 +74,7 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed):
 
     return cumulative, accepts / n_queries, total
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
@@ -91,15 +82,24 @@ def main():
     ap.add_argument("--index-path", default=None)
     ap.add_argument("--alpha", type=float, default=1.0)
     ap.add_argument("--temperature", type=float, default=0.5)
+    ap.add_argument("--qnet-temp", type=float, default=0.1)
     ap.add_argument("--output-dir", default="reports/figs")
     ap.add_argument("--mlp", action="store_true", help="Use MLP difficulty estimator")
+    ap.add_argument("--policies", type=str, default="fixed,linucb,qnet",
+                    help="Comma-separated list: fixed,linucb,qnet")
     args = ap.parse_args()
+
+    selected = [p.strip() for p in args.policies.split(",")]
+    valid = {"fixed", "linucb", "qnet"}
+    for p in selected:
+        if p not in valid:
+            raise ValueError(f"Unknown policy '{p}'. Choices: {valid}")
 
     cfg = yaml.safe_load(open(args.config))
     n_queries = args.n_queries
     seed = cfg["experiment"]["seed"]
 
-    # ── 加载数据 ──
+    # ── Load data ──
     name = cfg["dataset"]["name"]
     print(f"Loading {name}...")
     if name == "ag_news":
@@ -111,7 +111,7 @@ def main():
     index_path = args.index_path or os.path.join(cfg["dataset"]["path"], "index_ivfpq.faiss")
     index = faiss.read_index(index_path)
 
-    # ── 共享组件（两组实验一致）──
+    # ── Shared components ──
     if args.mlp:
         diff_est = MLPDifficultyEstimator(
             onnx_path="models/difficulty_v1.onnx",
@@ -120,85 +120,91 @@ def main():
     else:
         diff_est = DifficultyEstimator(sample_vectors=xt[:5000])
     execution = ExecutionAgent(index, cfg["cost_model"])
-    from src.data.buyer_simulator import BuyerSimulator
-    buyer = BuyerSimulator(seed=seed)
-
-    # ── 跑 FixedPolicy ──
-    print("\n=== FixedPolicy (W1) ===")
-    fixed = FixedPolicy(
-        cfg["execution"]["search_param_configs"],
-        cfg["pricing"]["tiers"],
-        default_z_index=2, default_p_index=2,
-        epsilon=0.1, seed=seed,
+    buyer = BuyerSimulator(
+        seed=seed,
+        best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
+        worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
     )
-
     log_dir = cfg["logging"]["output_dir"]
-    log_fixed = LogWriter(os.path.join(log_dir, "cmp_fixed"), flush_every_n=1000)
-    shadow_fixed = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
-                                max_workers=2, on_recall_computed=log_fixed.record_recall, seed=seed)
-    orch_fixed = Orchestrator(diff_est, fixed, execution,
-                                shadow_fixed, log_fixed, ContextCache(100))
+    z_configs = cfg["execution"]["search_param_configs"]
+    price_tiers = cfg["pricing"]["tiers"]
 
-    cum_fixed, ar_fixed, rev_fixed = run_policy(
-        fixed, orch_fixed, buyer, xq, n_queries, seed)
-    shadow_fixed.drain()
-    shadow_fixed.shutdown()
-    log_fixed.close()
+    # ── Build & run each policy ──
+    results = {}
 
-    # ── 跑 LinUCB ──
-    print("\n=== LinUCB (W3) ===")
-    linucb = LinUCBPolicy(
-        cfg["execution"]["search_param_configs"],
-        cfg["pricing"]["tiers"],
-        alpha=args.alpha, temperature=args.temperature, seed=seed,
-    )
+    if "fixed" in selected:
+        print("\n=== FixedPolicy (W1) ===")
+        policy = FixedPolicy(z_configs, price_tiers,
+                             default_z_index=2, default_p_index=2,
+                             epsilon=0.1, seed=seed)
+        log_writer = LogWriter(os.path.join(log_dir, "cmp_fixed"), flush_every_n=1000)
+        shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                               max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+        orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        shadow.drain(); shadow.shutdown(); log_writer.close()
+        results["fixed"] = {"cum": cum, "ar": ar, "rev": rev, "label": "FixedPolicy (ε=0.1)"}
 
-    log_linucb = LogWriter(os.path.join(log_dir, "cmp_linucb"), flush_every_n=1000)
-    shadow_linucb = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
-                                    max_workers=2, on_recall_computed=log_linucb.record_recall, seed=seed)
-    orch_linucb = Orchestrator(diff_est, linucb, execution,
-                                shadow_linucb, log_linucb, ContextCache(100))
+    if "linucb" in selected:
+        print("\n=== LinUCB (W3) ===")
+        policy = LinUCBPolicy(z_configs, price_tiers,
+                              alpha=args.alpha, temperature=args.temperature, seed=seed)
+        log_writer = LogWriter(os.path.join(log_dir, "cmp_linucb"), flush_every_n=1000)
+        shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                               max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+        orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        shadow.drain(); shadow.shutdown(); log_writer.close()
+        results["linucb"] = {"cum": cum, "ar": ar, "rev": rev,
+                             "label": f"LinUCB (α={args.alpha}, τ={args.temperature})"}
 
-    cum_linucb, ar_linucb, rev_linucb = run_policy(
-        linucb, orch_linucb, buyer, xq, n_queries, seed)
-    shadow_linucb.drain()
-    shadow_linucb.shutdown()
-    log_linucb.close()
+    if "qnet" in selected:
+        model_path = "models/qnet_distilled_v1.pt"
+        if not os.path.exists(model_path):
+            print(f"\n⚠ Q-net model not found at {model_path}, skipping. Run train_qnet.py first.")
+        else:
+            print("\n=== Distilled Q-Net (W6) ===")
+            policy = QLearningPolicy(z_configs, price_tiers,
+                                     model_path=model_path, temperature=args.qnet_temp)
+            log_writer = LogWriter(os.path.join(log_dir, "cmp_qnet"), flush_every_n=1000)
+            shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                                   max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+            orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+            cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            shadow.drain(); shadow.shutdown(); log_writer.close()
+            results["qnet"] = {"cum": cum, "ar": ar, "rev": rev,
+                               "label": f"Distilled Q-Net (τ={args.qnet_temp})"}
 
-    # ── 结果 ──
-    improvement = (rev_linucb - rev_fixed) / abs(rev_fixed) * 100
-    print(f"\n{'='*60}")
+    if not results:
+        print("No policies ran.")
+        return
+
+    # ── Results table ──
+    print(f"\n{'='*70}")
     print(f"Results ({n_queries} queries)")
-    print(f"{'='*60}")
-    print(f"  FixedPolicy  revenue: ${rev_fixed:.4f}  accept: {ar_fixed:.2%}")
-    print(f"  LinUCB       revenue: ${rev_linucb:.4f}  accept: {ar_linucb:.2%}")
-    print(f"  Improvement: {improvement:+.1f}%")
-    print(f"  {'PASS' if improvement > 15 else 'FAIL'} (threshold: >15%)")
+    print(f"{'='*70}")
+    for key, r in results.items():
+        print(f"  {r['label']:>35s}  revenue: ${r['rev']:.4f}  accept: {r['ar']:.2%}")
 
-    # ── 画图 ──
+    # ── Plot ──
+    colors = {"fixed": "#1f77b4", "linucb": "#ff7f0e", "qnet": "#2ca02c"}
     os.makedirs(args.output_dir, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
     queries = np.arange(1, n_queries + 1)
-    ax.plot(queries, cum_fixed, label='FixedPolicy (ε=0.1)', linewidth=1.5, alpha=0.85)
-    ax.plot(queries, cum_linucb, label=f'LinUCB (α={args.alpha}, τ={args.temperature})',
-            linewidth=1.5, alpha=0.85)
-    ax.fill_between(queries, cum_fixed, cum_linucb,
-                    alpha=0.15, color='green' if rev_linucb > rev_fixed else 'red')
-    ax.set_xlabel('Number of Queries')
-    ax.set_ylabel('Cumulative Revenue (USD)')
-    ax.set_title(f'FixedPolicy vs LinUCB\nImprovement: {improvement:+.1f}%')
+    for key, r in results.items():
+        ax.plot(queries, r["cum"], label=r["label"], linewidth=1.5,
+                color=colors.get(key), alpha=0.85)
+    ax.set_xlabel("Number of Queries")
+    ax.set_ylabel("Cumulative Revenue (USD)")
+    ax.set_title("Policy Comparison: FixedPolicy vs LinUCB vs Distilled Q-Net")
     ax.legend(loc='upper left')
     ax.grid(True, alpha=0.3)
-    ax.text(0.98, 0.05,
-            f'Δ = {improvement:+.1f}%\nFixed: ${rev_fixed:.2f}\nLinUCB: ${rev_linucb:.2f}',
-            transform=ax.transAxes, fontsize=10, va='bottom', ha='right',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     plt.tight_layout()
-    out_path = os.path.join(args.output_dir, 'bandit_vs_fixed_revenue.png')
+    out_path = os.path.join(args.output_dir, "policy_comparison.png")
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"\nSaved: {out_path}")
 
 
 if __name__ == "__main__":
-      main()
+    main()

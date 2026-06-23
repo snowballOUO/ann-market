@@ -30,8 +30,12 @@ class BuyerProfile:
 
 
 class BuyerSimulator:
-    def __init__(self, seed: int = 42):
+    def __init__(self, seed: int = 42,
+                 best_dist_anchor: float = 40000.0,
+                 worst_dist_anchor: float = 150000.0):
         self.rng = np.random.default_rng(seed)
+        self.best_dist_anchor = best_dist_anchor
+        self.worst_dist_anchor = worst_dist_anchor
         
         # 1. 定义 3 种经典的买方类型与显式参数校准
         self.profiles = [
@@ -85,21 +89,13 @@ class BuyerSimulator:
         distances = [res[1] for res in results]
         mean_dist = sum(distances) / len(distances)
 
-        # --- 针对 SIFT1M (L2距离) 的经验锚点 ---
-        # 完美暴搜的平均距离通常在 40,000 左右 (最佳体验)
-        # 极端欠搜索 (nprobe=1) 的平均距离会飙升到 150,000 以上 (极差体验)
-        # 注意：如果后续换了 cosine 距离或别的数据集，这里的锚点需要重新 Calibrate
-        best_dist_anchor = 40000.0
-        worst_dist_anchor = 150000.0
-
         # 将距离线性映射到 [0.0, 1.0] 的召回率区间
-        # 距离越小 (越接近 best_dist_anchor)，感知召回率越高
-        if mean_dist <= best_dist_anchor:
+        if mean_dist <= self.best_dist_anchor:
             perceived = 1.0
-        elif mean_dist >= worst_dist_anchor:
+        elif mean_dist >= self.worst_dist_anchor:
             perceived = 0.0
         else:
-            perceived = 1.0 - ((mean_dist - best_dist_anchor) / (worst_dist_anchor - best_dist_anchor))
+            perceived = 1.0 - ((mean_dist - self.best_dist_anchor) / (self.worst_dist_anchor - self.best_dist_anchor))
 
         # 结合数量惩罚 (以防未来引入 filter 导致结果数真的不够)
         count_penalty = len(results) / query.k_t

@@ -17,7 +17,8 @@ class SmallQNet(nn.Module):
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.net(state)
 
-def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader, epochs: int = 10):
+def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader,
+                   state_dim: int, epochs: int = 10):
     """
     将 LargeQNet 的知识蒸馏到 SmallQNet。
     """
@@ -27,22 +28,21 @@ def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader, epochs: in
     mse_loss = nn.MSELoss()
 
     for epoch in range(epochs):
-        for states in dataloader:
-            # 取出状态 (无需动作和奖励，纯粹对齐函数空间)
+        for batch in dataloader:
+            states = batch[0] if isinstance(batch, (list, tuple)) else batch
             with torch.no_grad():
                 teacher_q = teacher(states)
-            
+
             student_q = student(states)
-            
-            # 直接回归 Teacher 的 Q 值
+
             loss = mse_loss(student_q, teacher_q)
-            
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-    # 最终保存为 TorchScript 格式，脱离 Python GIL 进一步加速推理
+
+    # 导出 TorchScript，用显式 state_dim 保证维度正确
     student.eval()
-    dummy_input = torch.randn(1, states.shape[1])
+    dummy_input = torch.randn(1, state_dim)
     traced_script_module = torch.jit.trace(student, dummy_input)
     traced_script_module.save("models/qnet_distilled_v1.pt")

@@ -25,24 +25,15 @@ class QLearningPolicy:
     def _extract_state(self, query: Query, U_t: float, h_t: dict) -> torch.Tensor:
         """
         构造状态向量。必须包含 U_t 以完成混淆消除 (Deconfounding)。
+        6 维特征，与 LinUCB._build_features() 和 dr_estimator.build_state() 完全一致。
         """
-        # 解析复杂的标量过滤条件。
-        # 如果涉及类似 ACORN 数据集的过滤字段，需将 token 转换为实际的 pct 浮点数比例。
-        filter_ratio = 1.0
-        if query.filter_t:
-            raw_val = query.filter_t.get("filter_ratio_token", "")
-            if isinstance(raw_val, str) and "pct" in raw_val:
-                filter_ratio = float(raw_val.replace("p", ".").replace("pct", ""))
-
         state_features = [
-            U_t,                        # [极其关键] W4 训练的精确难度评估
-            float(np.linalg.norm(query.v_t)),
-            query.k_t / 100.0,
-            query.sla_t,
-            query.budget_t,
-            filter_ratio,
-            h_t.get("recent_accept_rate", 0.5),
-            h_t.get("recent_mean_latency", 0.05)
+            U_t,                                          # [0] 查询难度
+            h_t.get("recent_accept_rate", 0.5),           # [1] 近期接受率
+            h_t.get("recent_mean_latency", 0.0) * 1000,   # [2] 近期延迟 (ms)
+            query.k_t / 100.0,                            # [3] 请求 k [0.1, 1.0]
+            query.sla_t * 1000,                           # [4] SLA (ms)
+            query.budget_t * 1000,                        # [5] 预算 (毫美元)
         ]
         return torch.tensor([state_features], dtype=torch.float32)
 

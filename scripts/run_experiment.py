@@ -116,7 +116,11 @@ def main():
         seed=seed,
     )
 
-    buyer = BuyerSimulator(seed=seed)
+    buyer = BuyerSimulator(
+        seed=seed,
+        best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
+        worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
+    )
     ctx = ContextCache(window_size=100)
     orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ctx)
 
