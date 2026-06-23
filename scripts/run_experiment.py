@@ -96,7 +96,7 @@ def main():
         policy = QLearningPolicy(
             search_param_configs=cfg["execution"]["search_param_configs"],
             price_tiers=cfg["pricing"]["tiers"],
-            model_path="models/qnet_distilled_v1.pt",
+            model_path="models/qnet_distilled_v1.onnx",
             temperature=0.1
         )
     # 

@@ -46,3 +46,16 @@ def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader, epochs: in
     dummy_input = torch.randn(1, states.shape[1])
     traced_script_module = torch.jit.trace(student, dummy_input)
     traced_script_module.save("models/qnet_distilled_v1.pt")
+
+    # Add onnx
+    torch.onnx.export(
+    student,                          # 这里传入你刚训练好的 student 模型
+    dummy_input,                      # 给定一个示范形状
+    "models/qnet_distilled_v1.onnx",
+    export_params=True,
+    opset_version=14,
+    do_constant_folding=True,         # 常量折叠，直接把固定参数算好，极大加速
+    input_names=['state'],
+    output_names=['q_values']
+    )
+    print("✅ 成功导出 TorchScript 和 ONNX 双版本模型！")

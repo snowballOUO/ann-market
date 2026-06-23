@@ -1,5 +1,6 @@
+import torch
+import torch.nn.functional as F
 import numpy as np
-import onnxruntime as ort
 from typing import Tuple
 from src.system.types import Query, Action
 
@@ -8,7 +9,7 @@ class QLearningPolicy:
         self,
         search_param_configs: list[dict],
         price_tiers: list[float],
-        model_path: str = "models/qnet_distilled_v1.onnx", # 默认后缀改成 onnx
+        model_path: str = "models/qnet_distilled_v1.pt",
         temperature: float = 0.1
     ):
         self.configs = search_param_configs
@@ -16,25 +17,17 @@ class QLearningPolicy:
         self.n_actions = len(self.configs) * len(self.prices)
         self.temperature = temperature
         
-        # 加载蒸馏后的 ONNX 模型，开启极速推理
-        sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = 1  # 极小模型强行绑定单线程最快
-        self.ort_session = ort.InferenceSession(
-            model_path, 
-            sess_options, 
-            providers=['CPUExecutionProvider']
-        )
-        self.input_name = self.ort_session.get_inputs()[0].name
-        
-        # 更新版本号以作区分
-        self.version = "qlearning-dr-v1-onnx"
+        # 加载蒸馏后的轻量级 TorchScript 模型，极速推理
+        self.model = torch.jit.load(model_path)
+        self.model.eval()
+        self.version = "qlearning-dr-v1"
 
-    def _extract_state(self, query: Query, U_t: float, h_t: dict) -> np.ndarray:
+    def _extract_state(self, query: Query, U_t: float, h_t: dict) -> torch.Tensor:
         """
         构造状态向量。必须包含 U_t 以完成混淆消除 (Deconfounding)。
-        直接返回纯 NumPy 数组，彻底摆脱 PyTorch 开销。
         """
-        # 解析复杂的标量过滤条件
+        # 解析复杂的标量过滤条件。
+        # 如果涉及类似 ACORN 数据集的过滤字段，需将 token 转换为实际的 pct 浮点数比例。
         filter_ratio = 1.0
         if query.filter_t:
             raw_val = query.filter_t.get("filter_ratio_token", "")
@@ -51,23 +44,19 @@ class QLearningPolicy:
             h_t.get("recent_accept_rate", 0.5),
             h_t.get("recent_mean_latency", 0.05)
         ]
-        
-        # 直接返回 float32 的 numpy array，并加上 batch_size=1 的维度
-        return np.array([state_features], dtype=np.float32)
+        return torch.tensor([state_features], dtype=torch.float32)
 
     def decide(self, query: Query, U_t: float, h_t: dict) -> Tuple[Action, float, str]:
         """
         使用 Boltzmann Sampling 选择动作，保证 Propensity > 0 的致命不变量。
         """
-        state_array = self._extract_state(query, U_t, h_t)
+        state_tensor = self._extract_state(query, U_t, h_t)
         
-        # 纯 C++ 极速推理，拿到 Q 值 (剥离 batch 维度)
-        q_values = self.ort_session.run(None, {self.input_name: state_array})[0][0]
-        
-        # 手写安全的波尔兹曼分布提取概率 (替代 F.softmax)
-        q_shifted = q_values - np.max(q_values) # 防止指数爆炸
-        exp_q = np.exp(q_shifted / self.temperature)
-        probs = exp_q / np.sum(exp_q)
+        with torch.no_grad():
+            q_values = self.model(state_tensor).squeeze(0)
+            
+        # 波尔兹曼分布提取概率 (Temperature Trick)
+        probs = F.softmax(q_values / self.temperature, dim=0).numpy()
         
         # 强制概率下限 (防止浮点精度导致的纯 0，保护下游 IS 权重)
         probs = np.clip(probs, a_min=1e-5, a_max=1.0)
