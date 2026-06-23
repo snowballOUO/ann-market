@@ -190,14 +190,10 @@ def main():
     seed=cfg["experiment"]["seed"]
 
     # ── 1. 加载数据 ──
-    from src.data.datasets import load_sift1m, load_hdf5
+    from src.data.datasets import load_dataset
     name = cfg["dataset"]["name"]
     print(f"Loading {name}...")
-    if name == "ag_news":
-        filepath = os.path.join(data_dir, cfg["dataset"]["file"])
-        xb, xq, xt, gt = load_hdf5(filepath)
-    else:
-        xb, xq, xt, gt = load_sift1m(data_dir)
+    xb, xq, xt, gt = load_dataset(cfg)
 
     index_path = os.path.join(data_dir, "index_ivfpq.faiss")
     index = faiss.read_index(index_path)

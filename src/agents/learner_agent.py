@@ -38,6 +38,7 @@ class LearnerAgent:
             "mean_latency_ms": df["L_t"].mean() * 1000,
             "p99_latency_ms": df["L_t"].quantile(0.99) * 1000,
             "accept_rate": df["A_t"].mean(),
+            "sla_violation_rate": df["sla_violated"].mean() if "sla_violated" in df.columns else None,
             "total_revenue": df["R_t"].sum(),
             "mean_propensity": df["propensity"].mean(),
             "min_propensity": df["propensity"].min(),

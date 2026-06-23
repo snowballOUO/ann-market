@@ -40,6 +40,7 @@ class Outcome:
     A_t: bool                  # buyer accepted?
     S_t: Optional[float]       # buyer satisfaction score (None if not measured)
     R_t: float                 # platform revenue = (p_t - C_t) if A_t else -C_t
+    sla_violated: bool = False # query latency exceeded SLA constraint
 
 
 @dataclass
@@ -76,5 +77,6 @@ class Trajectory:
             "A_t": self.outcome.A_t,
             "S_t": self.outcome.S_t,
             "R_t": self.outcome.R_t,
+            "sla_violated": self.outcome.sla_violated,
             "timestamp": self.timestamp,
         }

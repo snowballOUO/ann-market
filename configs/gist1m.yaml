@@ -1,14 +1,14 @@
 dataset:
-    name: ag_news
-    path: data/ag_news
-    dim: 384
+    name: gist1m
+    path: data/gist1m
+    dim: 960
     format: hdf5
-    file: ag_news-384-euclidean.hdf5
+    file: gist-960-euclidean.hdf5
 
 index:
     type: ivfpq
     nlist: 4096
-    m: 24          # 384 / 24 = 16 dims per sub-vector
+    m: 40                   # 960 / 40 = 24 dims per sub-vector
     nbits: 8
     metric: L2
 
@@ -32,8 +32,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 40000.0       # SIFT1M: ~40K L2 dist for exact search
-  worst_dist_anchor: 150000.0      # SIFT1M: ~150K L2 dist for worst search
+  best_dist_anchor: 100000.0        # TODO: calibrate for 960-dim L2
+  worst_dist_anchor: 400000.0
 
 logging:
   output_dir: logs

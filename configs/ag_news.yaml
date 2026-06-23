@@ -8,7 +8,7 @@ dataset:
 index:
     type: ivfpq
     nlist: 4096
-    m: 24          # 384 / 24 = 16 dims per sub-vector
+    m: 24                   # 384 / 24 = 16 dims per sub-vector
     nbits: 8
     metric: L2
 
@@ -32,8 +32,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 40000.0       # SIFT1M: ~40K L2 dist for exact search
-  worst_dist_anchor: 150000.0      # SIFT1M: ~150K L2 dist for worst search
+  best_dist_anchor: 40000.0         # TODO: calibrate for 384-dim L2
+  worst_dist_anchor: 150000.0
 
 logging:
   output_dir: logs

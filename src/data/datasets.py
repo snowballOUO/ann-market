@@ -39,23 +39,30 @@ def read_ivecs(path: str) -> np.ndarray:
 
 
 def load_sift1m(base_dir: str):
-    """Return (xb, xq, xt, gt) where:
-       xb = base vectors  (1_000_000, 128)
-       xq = query vectors (10_000, 128)
-       xt = train vectors (100_000, 128) — used for index training
-       gt = ground truth  (10_000, 100)  — top-100 exact neighbours per query
+    """Backward-compatible wrapper. Use load_dataset() for new code."""
+    return load_fvecs_dataset(base_dir, "sift")
+
+
+def load_fvecs_dataset(base_dir: str, prefix: str):
+    """Load a TexMex-style .fvecs/.ivecs dataset (SIFT1M, etc.).
+
+    Args:
+        base_dir: path containing .fvecs/.ivecs files
+        prefix:   file prefix, e.g. "sift", "deep", "gist"
+
+    Returns (xb, xq, xt, gt).
     """
     paths = {
-        "xb": os.path.join(base_dir, "sift_base.fvecs"),
-        "xq": os.path.join(base_dir, "sift_query.fvecs"),
-        "xt": os.path.join(base_dir, "sift_learn.fvecs"),
-        "gt": os.path.join(base_dir, "sift_groundtruth.ivecs"),
+        "xb": os.path.join(base_dir, f"{prefix}_base.fvecs"),
+        "xq": os.path.join(base_dir, f"{prefix}_query.fvecs"),
+        "xt": os.path.join(base_dir, f"{prefix}_learn.fvecs"),
+        "gt": os.path.join(base_dir, f"{prefix}_groundtruth.ivecs"),
     }
     for k, p in paths.items():
         if not os.path.exists(p):
             raise FileNotFoundError(
                 f"Missing {k} at {p}. "
-                "Run scripts/download_sift1m.sh first."
+                f"Run scripts/download_data.py {prefix}1m first."
             )
     return (
         read_fvecs(paths["xb"]),
@@ -63,6 +70,26 @@ def load_sift1m(base_dir: str):
         read_fvecs(paths["xt"]),
         read_ivecs(paths["gt"]),
     )
+
+
+def load_dataset(cfg: dict):
+    """Load any dataset based on config. Returns (xb, xq, xt, gt).
+
+    cfg keys used:
+        dataset.path, dataset.format, dataset.file, dataset.prefix
+    """
+    ds = cfg["dataset"]
+    fmt = ds.get("format", "fvecs")
+    data_dir = ds["path"]
+
+    if fmt == "hdf5":
+        filepath = os.path.join(data_dir, ds["file"])
+        return load_hdf5(filepath)
+    elif fmt == "fvecs":
+        prefix = ds.get("prefix", "sift")
+        return load_fvecs_dataset(data_dir, prefix)
+    else:
+        raise ValueError(f"Unknown dataset format: {fmt}")
 
 
 def load_hdf5(filepath: str):

@@ -19,7 +19,7 @@ import faiss
 import pandas as pd
 from tqdm import tqdm
 
-from src.data.datasets import load_sift1m, load_hdf5
+from src.data.datasets import load_dataset
 from src.data.buyer_simulator import BuyerSimulator
 from src.agents.difficulty_estimator import DifficultyEstimator
 from src.agents.execution_agent import ExecutionAgent
@@ -159,11 +159,7 @@ def main():
 
     # ── 1. 加载数据 ──
     print(f"Loading dataset from {data_dir}...")
-    name = cfg["dataset"]["name"]
-    if name == "ag_news":
-        xb, xq, xt, gt = load_hdf5(os.path.join(data_dir, cfg["dataset"]["file"]))
-    else:
-        xb, xq, xt, gt = load_sift1m(data_dir)
+    xb, xq, xt, gt = load_dataset(cfg)
 
     index_path = args.index_path or os.path.join(data_dir, "index_ivfpq.faiss")
     index = faiss.read_index(index_path)

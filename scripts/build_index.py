@@ -14,7 +14,7 @@ import yaml
 import numpy as np
 import faiss
 
-from src.data.datasets import load_sift1m, load_hdf5
+from src.data.datasets import load_dataset
 
 
 def main():
@@ -29,11 +29,11 @@ def main():
 
     name = cfg["dataset"]["name"]
     print(f"Loading {name} from {data_dir}...")
-    if name == "ag_news":
-        filepath = os.path.join(data_dir, cfg["dataset"]["file"])
-        xb, xq, xt, gt = load_hdf5(filepath)
-    else:
-        xb, xq, xt, gt = load_sift1m(data_dir)
+    xb, xq, xt, gt = load_dataset(cfg)
+    # Use 1M subset for large datasets (MS-MARCO has 8.8M)
+    max_base = cfg["dataset"].get("max_base", None)
+    if max_base and xb.shape[0] > max_base:
+        xb = xb[:max_base]
     print(f"  base:    {xb.shape}")
     print(f"  query:   {xq.shape}")
     print(f"  train:   {xt.shape}")

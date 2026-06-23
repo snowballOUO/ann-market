@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import faiss
 from tqdm import tqdm
 
-from src.data.datasets import load_sift1m, load_hdf5
+from src.data.datasets import load_dataset
 from src.data.buyer_simulator import BuyerSimulator
 from src.agents.difficulty_estimator import DifficultyEstimator, MLPDifficultyEstimator
 from src.agents.policy_agent import FixedPolicy
@@ -100,13 +100,8 @@ def main():
     seed = cfg["experiment"]["seed"]
 
     # ── Load data ──
-    name = cfg["dataset"]["name"]
-    print(f"Loading {name}...")
-    if name == "ag_news":
-        filepath = os.path.join(cfg["dataset"]["path"], cfg["dataset"]["file"])
-        xb, xq, xt, gt = load_hdf5(filepath)
-    else:
-        xb, xq, xt, gt = load_sift1m(cfg["dataset"]["path"])
+    print(f"Loading {cfg['dataset']['name']}...")
+    xb, xq, xt, gt = load_dataset(cfg)
 
     index_path = args.index_path or os.path.join(cfg["dataset"]["path"], "index_ivfpq.faiss")
     index = faiss.read_index(index_path)

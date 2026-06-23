@@ -25,6 +25,20 @@ def main():
     states = build_state(df).astype(np.float32)        # (N, 6) — 所有维度正确填充
     actions = build_action_index(df).astype(np.int64)  # (N,)  — 真实日志动作
     rewards = df["R_t"].values.astype(np.float32)
+
+    # ── Q_t 质量反馈：shadow-sampled 查询用真实 recall 修正 reward ──
+    quality_lambda = 0.02       # 质量权重（0 = 不关心质量）
+    target_recall = 0.7         # 最低可接受召回，低于此扣分
+    Q_t = df["Q_t"].values.astype(float)  # NaN for non-sampled
+    q_mask = ~np.isnan(Q_t)
+    n_quality = int(q_mask.sum())
+    if n_quality > 0:
+        quality_bonus = quality_lambda * (Q_t[q_mask] - target_recall)
+        rewards = rewards.copy()
+        rewards[q_mask] += quality_bonus
+        print(f"  Quality reward adjustment: {n_quality} queries "
+              f"(avg Δ={quality_bonus.mean():+.6f}, range=[{quality_bonus.min():+.4f}, {quality_bonus.max():+.4f}])")
+
     propensities = np.clip(df["propensity"].values, 1e-4, 1.0)
 
     n_actions = 25

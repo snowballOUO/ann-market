@@ -13,7 +13,7 @@ import numpy as np
 import faiss
 from tqdm import tqdm
 
-from src.data.datasets import load_sift1m, load_hdf5
+from src.data.datasets import load_dataset
 from src.data.buyer_simulator import BuyerSimulator
 from src.agents.difficulty_estimator import MLPDifficultyEstimator
 from src.agents.bandit_policy import LinUCBPolicy
@@ -58,16 +58,11 @@ def main():
     seed = cfg["experiment"]["seed"]
 
     # --- Load data ---
-    data_dir = cfg["dataset"]["path"]
     name = cfg["dataset"]["name"]
-    print(f"Loading {name} from {data_dir}...")
-    if name == "ag_news":
-        filepath = os.path.join(data_dir, cfg["dataset"]["file"])
-        xb, xq, xt, gt = load_hdf5(filepath)
-    else:
-        xb, xq, xt, gt = load_sift1m(data_dir)
+    print(f"Loading {name} from {cfg['dataset']['path']}...")
+    xb, xq, xt, gt = load_dataset(cfg)
 
-    index_path = args.index_path or os.path.join(data_dir, "index_ivfpq.faiss")
+    index_path = args.index_path or os.path.join(cfg["dataset"]["path"], "index_ivfpq.faiss")
     if not os.path.exists(index_path):
         raise FileNotFoundError(
             f"Index not found at {index_path}. Run scripts/build_index.py first."

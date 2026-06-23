@@ -61,10 +61,11 @@ class Orchestrator:
             results=results,
             L_t=L_t,
             C_t=C_t,
-            Q_t=None,           # filled in later by shadow sampler callback
+            Q_t=None,
             A_t=A_t,
             S_t=S_t,
             R_t=R_t,
+            sla_violated=(L_t > query.sla_t),
         )
 
         # 8. Log + update context
