@@ -1,8 +1,8 @@
+import argparse
 import os
 import glob
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
@@ -10,16 +10,36 @@ from src.models.q_net import LargeQNet, causal_dr_bellman_loss
 from src.models.distill import SmallQNet, distill_q_net
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--log-dir", default=None, help="Specific log dir to train on")
+    ap.add_argument("--output", default="models/qnet_distilled_v1.pt")
+    args = ap.parse_args()
+
     from src.causal.dr_estimator import load_logs, build_state, build_action_index
 
-    print("1. 正在寻找最新的历史日志...")
-    log_dirs = sorted(glob.glob("logs/run_*"))
-    if not log_dirs:
-        raise FileNotFoundError("No log directories found under logs/")
-    latest_log_dir = log_dirs[-1]
+    if args.log_dir:
+        latest_log_dir = args.log_dir
+    else:
+        print("1. 正在寻找最新的历史日志...")
+        log_dirs = sorted(glob.glob("logs/run_*"))
+        if not log_dirs:
+            raise FileNotFoundError("No log directories found under logs/")
+        latest_log_dir = log_dirs[-1]
 
+    import pandas as pd
     df = load_logs(latest_log_dir)  # 自动清洗 NaN 和 orphan 记录
     print(f"成功加载日志: {latest_log_dir}，共 {len(df)} 条轨迹。")
+
+    # ── 合并孤儿 shadow recall (晚到但 valid) ──
+    orphan_files = sorted(glob.glob(os.path.join(latest_log_dir, "*orphan*.parquet")))
+    if orphan_files:
+        df_orphan = pd.concat([pd.read_parquet(f) for f in orphan_files], ignore_index=True)
+        df_orphan = df_orphan.dropna(subset=["Q_t"])
+        recall_map = dict(zip(df_orphan["query_id"], df_orphan["Q_t"]))
+        # Overwrite Q_t for matching query_ids
+        matched = df["query_id"].isin(recall_map)
+        df.loc[matched, "Q_t"] = df.loc[matched, "query_id"].map(recall_map)
+        print(f"  Merged {len(df_orphan)} orphan shadow recalls, matched {matched.sum()} trajectories")
 
     print("2. 正在提取 Causal 状态特征 (Deconfounding)...")
     states = build_state(df).astype(np.float32)        # (N, 6) — 所有维度正确填充
@@ -27,9 +47,12 @@ def main():
     rewards = df["R_t"].values.astype(np.float32)
 
     # ── Q_t 质量反馈：shadow-sampled 查询用真实 recall 修正 reward ──
-    quality_lambda = 0.02       # 质量权重（0 = 不关心质量）
-    target_recall = 0.7         # 最低可接受召回，低于此扣分
-    Q_t = df["Q_t"].values.astype(float)  # NaN for non-sampled
+    Q_t = df["Q_t"].values.astype(float)  # NaN for non-sampled queries
+    mean_q = float(np.nanmean(Q_t)) if np.any(~np.isnan(Q_t)) else 0.5
+    target_recall = max(mean_q, 0.3)
+    quality_lambda = 0.05 / max(mean_q, 0.3)
+    n_quality = int((~np.isnan(Q_t)).sum())
+    print(f"  Auto-calibrated: mean_recall={mean_q:.3f}, target={target_recall:.2f}, lambda={quality_lambda:.4f}")
     q_mask = ~np.isnan(Q_t)
     n_quality = int(q_mask.sum())
     if n_quality > 0:
@@ -88,8 +111,8 @@ def main():
     os.makedirs("models", exist_ok=True)
     dummy_input = torch.randn(1, state_dim)
     traced_model = torch.jit.trace(small_q, dummy_input)
-    traced_model.save("models/qnet_distilled_v1.pt")
-    print("✅ 模型导出成功：models/qnet_distilled_v1.pt")
+    traced_model.save(args.output)
+    print(f"✅ 模型导出成功：{args.output}")
 
 if __name__ == "__main__":
     main()

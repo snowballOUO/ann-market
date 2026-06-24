@@ -4,11 +4,13 @@ dataset:
     dim: 96
     format: hdf5
     file: deep-image-96-angular.hdf5
+    max_base: 1000000           # full set is 10M; use 1M for index
+    normalize: true             # angular -> L2 via normalization
 
 index:
     type: ivfpq
-    nlist: 4096
-    m: 12                   # 96 / 12 = 8 dims per sub-vector
+    nlist: 2048
+    m: 24                   # 96 / 24 = 4 dims per sub-vector
     nbits: 8
     metric: L2
 
@@ -32,8 +34,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 0.5            # TODO: calibrate for 96-dim normalized L2
-  worst_dist_anchor: 2.0
+  best_dist_anchor: 0.2            # normalized L2 for very similar vectors
+  worst_dist_anchor: 1.5           # normalized L2 for dissimilar vectors
 
 logging:
   output_dir: logs

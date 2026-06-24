@@ -7,8 +7,8 @@ dataset:
 
 index:
     type: ivfpq
-    nlist: 4096
-    m: 40                   # 960 / 40 = 24 dims per sub-vector
+    nlist: 2048
+    m: 60                   # 960 / 60 = 16 dims per sub-vector
     nbits: 8
     metric: L2
 

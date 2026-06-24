@@ -29,11 +29,7 @@ def main():
 
     name = cfg["dataset"]["name"]
     print(f"Loading {name} from {data_dir}...")
-    xb, xq, xt, gt = load_dataset(cfg)
-    # Use 1M subset for large datasets (MS-MARCO has 8.8M)
-    max_base = cfg["dataset"].get("max_base", None)
-    if max_base and xb.shape[0] > max_base:
-        xb = xb[:max_base]
+    xb, xq, xt, gt = load_dataset(cfg)  # max_base + normalize handled in loader
     print(f"  base:    {xb.shape}")
     print(f"  query:   {xq.shape}")
     print(f"  train:   {xt.shape}")
@@ -61,14 +57,22 @@ def main():
     faiss.write_index(index, out_path)
     print(f"\nWrote index to {out_path} ({os.path.getsize(out_path) / 1e6:.1f} MB)")
 
-    # Quick sanity check
+    # Quick sanity check (skip out-of-range gt IDs from max_base truncation)
     print("\nSanity check with nprobe=16, 10 queries:")
     index.nprobe = 16
-    D, I = index.search(xq[:10], 10)
-    print(f"  first query top-10 indices: {I[0]}")
-    print(f"  ground truth top-10:        {gt[0][:10]}")
-    overlap = len(set(I[0].tolist()) & set(gt[0][:10].tolist()))
-    print(f"  recall@10: {overlap / 10:.2f}")
+    n_check = min(100, xq.shape[0])
+    recalls = []
+    for i in range(n_check):
+        D, I = index.search(xq[i:i+1], 10)
+        gt_i = gt[i]
+        valid = gt_i[gt_i >= 0]
+        if len(valid) > 0:
+            overlap = len(set(I[0].tolist()) & set(valid[:10].tolist()))
+            recalls.append(overlap / min(10, len(valid)))
+    if recalls:
+        print(f"  mean recall@10: {np.mean(recalls):.3f} (over {len(recalls)} valid queries)")
+    else:
+        print(f"  (no valid ground truth — all neighbors outside subset)")
 
 
 if __name__ == "__main__":

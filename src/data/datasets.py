@@ -76,7 +76,8 @@ def load_dataset(cfg: dict):
     """Load any dataset based on config. Returns (xb, xq, xt, gt).
 
     cfg keys used:
-        dataset.path, dataset.format, dataset.file, dataset.prefix
+        dataset.path, dataset.format, dataset.file, dataset.prefix,
+        dataset.max_base (optional), dataset.normalize (optional)
     """
     ds = cfg["dataset"]
     fmt = ds.get("format", "fvecs")
@@ -84,12 +85,41 @@ def load_dataset(cfg: dict):
 
     if fmt == "hdf5":
         filepath = os.path.join(data_dir, ds["file"])
-        return load_hdf5(filepath)
+        xb, xq, xt, gt = load_hdf5(filepath)
     elif fmt == "fvecs":
         prefix = ds.get("prefix", "sift")
-        return load_fvecs_dataset(data_dir, prefix)
+        xb, xq, xt, gt = load_fvecs_dataset(data_dir, prefix)
     else:
         raise ValueError(f"Unknown dataset format: {fmt}")
+
+    # L2-normalize for angular-distance datasets (L2 ≈ angular on unit vectors)
+    if ds.get("normalize", False):
+        xb = _normalize(xb)
+        xq = _normalize(xq)
+
+    # Truncate base to max_base via random sampling
+    max_base = ds.get("max_base", None)
+    if max_base and xb.shape[0] > max_base:
+        orig_n = xb.shape[0]
+        seed = ds.get("seed", 42)
+        rng = np.random.default_rng(seed)
+        sampled = rng.choice(orig_n, size=max_base, replace=False)
+        sampled.sort()
+        xb = xb[sampled]
+        # Remap ground-truth IDs: old -> new position
+        if gt is not None:
+            id_map = np.full(orig_n, -1, dtype=np.int32)
+            id_map[sampled] = np.arange(max_base, dtype=np.int32)
+            gt = id_map[np.clip(gt, 0, orig_n - 1)]
+
+    return xb, xq, xt, gt
+
+
+def _normalize(vectors: np.ndarray) -> np.ndarray:
+    """L2-normalize vectors in-place."""
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-12)
+    return vectors / norms
 
 
 def load_hdf5(filepath: str):
@@ -111,8 +141,8 @@ def load_hdf5(filepath: str):
         xq = f["test"][:].astype(np.float32)
         gt = f["neighbors"][:].astype(np.int32)
 
-    # use first 100K base vectors as training set for index building
-    n_train = min(100000, xb.shape[0])
+    # use up to 200K base vectors as training set for index building
+    n_train = min(200000, xb.shape[0])
     xt = xb[:n_train].copy()
 
     return xb, xq, xt, gt
