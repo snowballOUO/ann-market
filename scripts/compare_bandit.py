@@ -48,12 +48,16 @@ def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
 
 
 def run_policy(policy, orch, buyer, xq, n_queries, seed):
-    """Run N queries, return cumulative revenue, accept rate, total revenue."""
+    """Run N queries, return cumulative revenue and per-query metrics."""
     rng = np.random.default_rng(seed)
     n_qv = xq.shape[0]
     cumulative = np.zeros(n_queries)
     total = 0.0
     accepts = 0
+    prices = []
+    sla_violations = 0
+    costs = []
+    q_t_values = []
 
     for i in tqdm(range(n_queries), desc=policy.version, leave=False):
         v = xq[i % n_qv]
@@ -71,8 +75,21 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed):
         total += outcome.R_t
         accepts += 1 if outcome.A_t else 0
         cumulative[i] = total
+        prices.append(orch._last_action.p_t if hasattr(orch, '_last_action') else 0)
+        sla_violations += 1 if outcome.L_t > q.sla_t else 0
+        costs.append(outcome.C_t)
+        if outcome.Q_t is not None:
+            q_t_values.append(outcome.Q_t)
 
-    return cumulative, accepts / n_queries, total
+    return {
+        "cum": cumulative,
+        "accept_rate": accepts / n_queries,
+        "total_rev": total,
+        "avg_price": float(np.mean(prices)) if prices else 0.0,
+        "sla_violation_rate": sla_violations / n_queries,
+        "mean_recall": float(np.mean(q_t_values)) if q_t_values else None,
+        "avg_cost": float(np.mean(costs)) if costs else 0.0,
+    }
 
 
 def main():
@@ -118,8 +135,9 @@ def main():
 
     # ── Shared components ──
     if args.mlp:
+        onnx_path = cfg.get("models", {}).get("difficulty", "models/difficulty_v1.onnx")
         diff_est = MLPDifficultyEstimator(
-            onnx_path="models/difficulty_v1.onnx",
+            onnx_path=onnx_path,
             sample_vectors=xt[:5000],
         )
     else:
@@ -146,9 +164,12 @@ def main():
         shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
         orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        r = run_policy(policy, orch, buyer, xq, n_queries, seed)
         shadow.drain(); shadow.shutdown(); log_writer.close()
-        results["fixed"] = {"cum": cum, "ar": ar, "rev": rev, "label": "FixedPolicy (ε=0.1)"}
+        results["fixed"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
+         "label": "FixedPolicy (ε=0.1)"}
 
     if "linucb" in selected:
         print("\n=== LinUCB (W3) ===")
@@ -158,9 +179,11 @@ def main():
         shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
         orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        r = run_policy(policy, orch, buyer, xq, n_queries, seed)
         shadow.drain(); shadow.shutdown(); log_writer.close()
-        results["linucb"] = {"cum": cum, "ar": ar, "rev": rev,
+        results["linucb"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
                              "label": f"LinUCB (α={args.alpha}, τ={args.temperature})"}
 
     if "qnet" in selected:
@@ -175,9 +198,11 @@ def main():
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
             orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-            cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            r = run_policy(policy, orch, buyer, xq, n_queries, seed)
             shadow.drain(); shadow.shutdown(); log_writer.close()
-            results["qnet"] = {"cum": cum, "ar": ar, "rev": rev,
+            results["qnet"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
                                "label": f"Distilled Q-Net (τ={args.qnet_temp})"}
 
     if "sla" in selected:
@@ -188,9 +213,12 @@ def main():
         shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
         orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        r = run_policy(policy, orch, buyer, xq, n_queries, seed)
         shadow.drain(); shadow.shutdown(); log_writer.close()
-        results["sla"] = {"cum": cum, "ar": ar, "rev": rev, "label": "SLA Heuristic"}
+        results["sla"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
+         "label": "SLA Heuristic"}
 
     if "cost" in selected:
         from src.agents.cost_based_policy import CostBasedPolicy
@@ -201,9 +229,11 @@ def main():
         shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
         orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        r = run_policy(policy, orch, buyer, xq, n_queries, seed)
         shadow.drain(); shadow.shutdown(); log_writer.close()
-        results["cost"] = {"cum": cum, "ar": ar, "rev": rev,
+        results["cost"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
                             "label": f"Cost-Based (margin={args.margin:.0f}x)"}
 
     if "naive_dqn" in selected:
@@ -219,9 +249,11 @@ def main():
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
             orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-            cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            r = run_policy(policy, orch, buyer, xq, n_queries, seed)
             shadow.drain(); shadow.shutdown(); log_writer.close()
-            results["naive_dqn"] = {"cum": cum, "ar": ar, "rev": rev,
+            results["naive_dqn"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
                                     "label": "Naive DQN (no U_t)"}
 
     if not results:
@@ -237,8 +269,14 @@ def main():
 
     if args.results_json:
         import json
-        out = {k: {"revenue": round(float(v["rev"]), 6), "accept_rate": round(float(v["ar"]), 6)}
-               for k, v in results.items()}
+        out = {k: {
+            "revenue": round(float(v["rev"]), 6),
+            "accept_rate": round(float(v["ar"]), 6),
+            "avg_price": round(float(v.get("avg_price", 0)), 6),
+            "sla_violation_rate": round(float(v.get("sla_violation", 0)), 6),
+            "mean_recall": round(float(v.get("mean_recall", 0)), 6) if v.get("mean_recall") else None,
+            "avg_cost": round(float(v.get("avg_cost", 0)), 8),
+        } for k, v in results.items()}
         with open(args.results_json, "w") as f:
             json.dump(out, f)
 

@@ -134,14 +134,19 @@ def main():
 
             for method in METHODS:
                 if method in metrics:
+                    m = metrics[method]
                     all_rows.append({
                         "dataset": ds,
                         "method": method,
                         "seed": seed,
-                        "revenue": metrics[method]["revenue"],
-                        "accept_rate": metrics[method]["accept_rate"],
+                        "revenue": m["revenue"],
+                        "accept_rate": m["accept_rate"],
+                        "avg_price": m.get("avg_price", 0),
+                        "sla_violation_rate": m.get("sla_violation_rate", 0),
+                        "mean_recall": m.get("mean_recall"),
+                        "avg_cost": m.get("avg_cost", 0),
                     })
-                    print(f"    {method:12s}  revenue=${metrics[method]['revenue']:.4f}  accept={metrics[method]['accept_rate']:.3f}")
+                    print(f"    {method:12s}  revenue=${m['revenue']:.4f}  accept={m['accept_rate']:.3f}  sla={m.get('sla_violation_rate',0):.4f}  recall={m.get('mean_recall')}")
 
     # Save results (merge with existing)
     if all_rows:

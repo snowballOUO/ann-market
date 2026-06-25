@@ -79,7 +79,7 @@ def main():
     print("Building agents...")
     # Use a subsample of xt for the difficulty estimator's density features
     diff_est = MLPDifficultyEstimator(
-        onnx_path="models/difficulty_v1.onnx",
+        onnx_path=cfg.get("models", {}).get("difficulty", "models/difficulty_v1.onnx"),
         sample_vectors=xt[:5000],
     )
     # add policy arg

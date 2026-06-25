@@ -27,6 +27,9 @@ cost_model:
   base_per_ms: 0.00005
   fixed_overhead: 0.0001
 
+models:
+  difficulty: models/sift1m/difficulty_v1.onnx
+
 shadow:
   sample_rate: 0.02
   exact_search_k_multiplier: 1.0

@@ -101,7 +101,7 @@ class DifficultyMLP(nn.Module):
     def forward(self, x):
         return self.net(x).squeeze(-1)  # (batch, 1) → (batch,)
 
-def train(model,X_train,Y_train,X_val,Y_val,epochs=200,lr=0.001):
+def train(model,X_train,Y_train,X_val,Y_val,output_dir="models",epochs=200,lr=0.001):
     optimizer=torch.optim.Adam(model.parameters(),lr=lr)
     loss_fn=nn.MSELoss()
     best_val_loss=float("inf")
@@ -129,8 +129,8 @@ def train(model,X_train,Y_train,X_val,Y_val,epochs=200,lr=0.001):
         # —— 存最优模型 ——
         if val_loss<best_val_loss:
             best_val_loss=val_loss
-            os.makedirs("models",exist_ok=True)
-            torch.save(model.state_dict(),"models/difficulty_v1.pt")
+            os.makedirs(output_dir,exist_ok=True)
+            torch.save(model.state_dict(),os.path.join(output_dir,"difficulty_v1.pt"))
 
         if epoch%20==0:
             print(f"  epoch {epoch:3d}  train_loss={loss.item():.4f}  val_loss={val_loss:.4f}")
@@ -183,6 +183,7 @@ def validate_onnx(onnx_path="models/difficulty_v1.onnx",n_warmup=100,n_test=1000
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--output-dir", default="models", help="Dir for difficulty_v1.pt/.onnx")
     args=ap.parse_args()
 
     cfg=yaml.safe_load(open(args.config))
@@ -227,18 +228,22 @@ def main():
     # ── 5. 训练 ──
     print(f"\nTraining MLP...")
     model = DifficultyMLP(input_dim=6, hidden=64)
-    val_loss = train(model, X_train, y_train, X_val, y_val, epochs=200)
+    out_dir = args.output_dir
+    os.makedirs(out_dir, exist_ok=True)
+    val_loss = train(model, X_train, y_train, X_val, y_val, output_dir=out_dir, epochs=200)
 
     print(f"\nFinal val MSE: {val_loss:.4f}")
     print(f"  {'PASS' if val_loss < 0.05 else 'FAIL'} (threshold: val MSE < 0.05)")
 
     # ── 6. 导出 ONNX ──
-    print("\nExporting ONNX...")
-    model.load_state_dict(torch.load("models/difficulty_v1.pt"))
-    export_onnx(model)
+    pt_path = os.path.join(out_dir, "difficulty_v1.pt")
+    onnx_path = os.path.join(out_dir, "difficulty_v1.onnx")
+    print(f"\nExporting ONNX → {onnx_path}")
+    model.load_state_dict(torch.load(pt_path))
+    export_onnx(model, onnx_path)
 
     # ── 7. 验证 ONNX 推理延迟 ──
-    validate_onnx()
+    validate_onnx(onnx_path)
 
 
 if __name__ == "__main__":

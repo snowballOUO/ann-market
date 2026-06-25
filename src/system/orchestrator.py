@@ -43,6 +43,7 @@ class Orchestrator:
 
         # 3. Policy decision
         action, propensity, policy_version = self.policy.decide(query, U_t, h_t)
+        self._last_action = action
 
         # 4. Execute
         results, L_t, C_t = self.execution.search(query, action.z_t)
