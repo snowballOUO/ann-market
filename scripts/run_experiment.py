@@ -7,7 +7,6 @@ Usage:
 import argparse
 import os
 import time
-import uuid
 import yaml
 import numpy as np
 import faiss
