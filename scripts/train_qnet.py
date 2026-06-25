@@ -13,6 +13,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--log-dir", default=None, help="Specific log dir to train on")
     ap.add_argument("--output", default="models/qnet_distilled_v1.pt")
+    ap.add_argument("--no-ut", action="store_true", help="Zero out U_t (naive DQN baseline)")
+    ap.add_argument("--gamma", type=float, default=0.5)
     args = ap.parse_args()
 
     from src.causal.dr_estimator import load_logs, build_state, build_action_index
@@ -43,6 +45,9 @@ def main():
 
     print("2. 正在提取 Causal 状态特征 (Deconfounding)...")
     states = build_state(df).astype(np.float32)        # (N, 6) — 所有维度正确填充
+    if args.no_ut:
+        states[:, 0] = 0.0  # strip U_t for naive DQN baseline
+        print("  (U_t zeroed out — naive DQN mode)")
     actions = build_action_index(df).astype(np.int64)  # (N,)  — 真实日志动作
     rewards = df["R_t"].values.astype(np.float32)
 
@@ -90,7 +95,7 @@ def main():
         for s, a, r, s_next, p in loader:
             optimizer.zero_grad()
             # 降低 gamma，削弱无意义的自举反馈
-            loss = causal_dr_bellman_loss(large_q, s, a, r, s_next, p, gamma=0.5) 
+            loss = causal_dr_bellman_loss(large_q, s, a, r, s_next, p, gamma=args.gamma)
             
             if torch.isnan(loss):
                 continue # 如果出现异常 Batch，直接忽略保命

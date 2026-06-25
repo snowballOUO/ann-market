@@ -85,19 +85,29 @@ def main():
     ap.add_argument("--qnet-temp", type=float, default=0.1)
     ap.add_argument("--output-dir", default="reports/figs")
     ap.add_argument("--mlp", action="store_true", help="Use MLP difficulty estimator")
+    ap.add_argument("--margin", type=float, default=20.0,
+                    help="Cost-based pricing margin (default: 20 = 2000%%)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Override experiment seed")
+    ap.add_argument("--qnet-model", default=None,
+                    help="Path to Q-Net distilled model")
+    ap.add_argument("--naive-dqn-model", default=None,
+                    help="Path to Naive DQN distilled model")
+    ap.add_argument("--no-plot", action="store_true", help="Skip plot generation")
+    ap.add_argument("--results-json", default=None, help="Write results to JSON file")
     ap.add_argument("--policies", type=str, default="fixed,linucb,qnet",
-                    help="Comma-separated list: fixed,linucb,qnet")
+                    help="Comma-separated list: fixed,linucb,qnet,sla,cost,naive_dqn")
     args = ap.parse_args()
 
     selected = [p.strip() for p in args.policies.split(",")]
-    valid = {"fixed", "linucb", "qnet"}
+    valid = {"fixed", "linucb", "qnet", "sla", "cost", "naive_dqn"}
     for p in selected:
         if p not in valid:
             raise ValueError(f"Unknown policy '{p}'. Choices: {valid}")
 
     cfg = yaml.safe_load(open(args.config))
     n_queries = args.n_queries
-    seed = cfg["experiment"]["seed"]
+    seed = args.seed if args.seed is not None else cfg["experiment"]["seed"]
 
     # ── Load data ──
     print(f"Loading {cfg['dataset']['name']}...")
@@ -154,7 +164,7 @@ def main():
                              "label": f"LinUCB (α={args.alpha}, τ={args.temperature})"}
 
     if "qnet" in selected:
-        model_path = "models/qnet_distilled_v1.pt"
+        model_path = args.qnet_model or "models/qnet_distilled_v1.pt"
         if not os.path.exists(model_path):
             print(f"\n⚠ Q-net model not found at {model_path}, skipping. Run train_qnet.py first.")
         else:
@@ -170,6 +180,50 @@ def main():
             results["qnet"] = {"cum": cum, "ar": ar, "rev": rev,
                                "label": f"Distilled Q-Net (τ={args.qnet_temp})"}
 
+    if "sla" in selected:
+        from src.agents.sla_heuristic_policy import SLAHeuristicPolicy
+        print("\n=== SLA Heuristic ===")
+        policy = SLAHeuristicPolicy(z_configs, price_tiers, seed=seed)
+        log_writer = LogWriter(os.path.join(log_dir, "cmp_sla"), flush_every_n=1000)
+        shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                               max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+        orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        shadow.drain(); shadow.shutdown(); log_writer.close()
+        results["sla"] = {"cum": cum, "ar": ar, "rev": rev, "label": "SLA Heuristic"}
+
+    if "cost" in selected:
+        from src.agents.cost_based_policy import CostBasedPolicy
+        print("\n=== Cost-Based ===")
+        policy = CostBasedPolicy(z_configs, price_tiers, cfg["cost_model"],
+                                  margin=args.margin, seed=seed)
+        log_writer = LogWriter(os.path.join(log_dir, "cmp_cost"), flush_every_n=1000)
+        shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                               max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+        orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+        cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+        shadow.drain(); shadow.shutdown(); log_writer.close()
+        results["cost"] = {"cum": cum, "ar": ar, "rev": rev,
+                            "label": f"Cost-Based (margin={args.margin:.0f}x)"}
+
+    if "naive_dqn" in selected:
+        model_path = args.naive_dqn_model or "models/qnet_naive_dqn_v1.pt"
+        if not os.path.exists(model_path):
+            print(f"\n⚠ Naive DQN model not found. Train with: train_qnet.py --no-ut --output {model_path}")
+        else:
+            from src.agents.naive_dqn_policy import NaiveDQNPolicy
+            print("\n=== Naive DQN (No Deconfounding) ===")
+            policy = NaiveDQNPolicy(z_configs, price_tiers, model_path=model_path,
+                                    temperature=args.qnet_temp)
+            log_writer = LogWriter(os.path.join(log_dir, "cmp_naive_dqn"), flush_every_n=1000)
+            shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                                   max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+            orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+            cum, ar, rev = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            shadow.drain(); shadow.shutdown(); log_writer.close()
+            results["naive_dqn"] = {"cum": cum, "ar": ar, "rev": rev,
+                                    "label": "Naive DQN (no U_t)"}
+
     if not results:
         print("No policies ran.")
         return
@@ -181,24 +235,33 @@ def main():
     for key, r in results.items():
         print(f"  {r['label']:>35s}  revenue: ${r['rev']:.4f}  accept: {r['ar']:.2%}")
 
+    if args.results_json:
+        import json
+        out = {k: {"revenue": round(float(v["rev"]), 6), "accept_rate": round(float(v["ar"]), 6)}
+               for k, v in results.items()}
+        with open(args.results_json, "w") as f:
+            json.dump(out, f)
+
     # ── Plot ──
-    colors = {"fixed": "#1f77b4", "linucb": "#ff7f0e", "qnet": "#2ca02c"}
-    os.makedirs(args.output_dir, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(11, 6))
-    queries = np.arange(1, n_queries + 1)
-    for key, r in results.items():
-        ax.plot(queries, r["cum"], label=r["label"], linewidth=1.5,
-                color=colors.get(key), alpha=0.85)
-    ax.set_xlabel("Number of Queries")
-    ax.set_ylabel("Cumulative Revenue (USD)")
-    ax.set_title("Policy Comparison: FixedPolicy vs LinUCB vs Distilled Q-Net")
-    ax.legend(loc='upper left')
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    out_path = os.path.join(args.output_dir, "policy_comparison.png")
-    plt.savefig(out_path, dpi=150)
-    plt.close()
-    print(f"\nSaved: {out_path}")
+    if not args.no_plot:
+        colors = {"fixed": "#1f77b4", "linucb": "#ff7f0e", "qnet": "#2ca02c",
+                  "sla": "#d62728", "cost": "#9467bd", "naive_dqn": "#8c564b"}
+        os.makedirs(args.output_dir, exist_ok=True)
+        fig, ax = plt.subplots(figsize=(11, 6))
+        queries = np.arange(1, n_queries + 1)
+        for key, r in results.items():
+            ax.plot(queries, r["cum"], label=r["label"], linewidth=1.5,
+                    color=colors.get(key), alpha=0.85)
+        ax.set_xlabel("Number of Queries")
+        ax.set_ylabel("Cumulative Revenue (USD)")
+        ax.set_title("Policy Comparison: FixedPolicy vs LinUCB vs Distilled Q-Net")
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        out_path = os.path.join(args.output_dir, "policy_comparison.png")
+        plt.savefig(out_path, dpi=150)
+        plt.close()
+        print(f"\nSaved: {out_path}")
 
 
 if __name__ == "__main__":

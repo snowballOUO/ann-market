@@ -17,6 +17,10 @@ from src.data.datasets import load_dataset
 from src.data.buyer_simulator import BuyerSimulator
 from src.agents.difficulty_estimator import MLPDifficultyEstimator
 from src.agents.bandit_policy import LinUCBPolicy
+from src.agents.policy_agent import FixedPolicy
+from src.agents.sla_heuristic_policy import SLAHeuristicPolicy
+from src.agents.cost_based_policy import CostBasedPolicy
+from src.agents.naive_dqn_policy import NaiveDQNPolicy
 from src.agents.execution_agent import ExecutionAgent
 from src.agents.shadow_sampler import ShadowSampler
 from src.agents.learner_agent import LearnerAgent
@@ -49,7 +53,9 @@ def main():
     ap.add_argument("--n-queries", type=int, default=None)
     ap.add_argument("--index-path", default=None)
     # add policy arg
-    ap.add_argument("--policy", type=str, choices=["linucb", "qnet"], default="qnet", help="Which policy to run")
+    ap.add_argument("--policy", type=str,
+                    choices=["linucb", "qnet", "fixed", "sla", "cost", "naive_dqn"],
+                    default="qnet", help="Which policy to run")
     # 
     args = ap.parse_args()
 
@@ -78,23 +84,24 @@ def main():
         sample_vectors=xt[:5000],
     )
     # add policy arg
+    z_cfgs = cfg["execution"]["search_param_configs"]
+    prices = cfg["pricing"]["tiers"]
     if args.policy == "linucb":
-        policy = LinUCBPolicy(
-            search_param_configs=cfg["execution"]["search_param_configs"],
-            price_tiers=cfg["pricing"]["tiers"],
-            alpha=1.0,
-            temperature=0.5,
-            seed=seed,
-        )
-    # 终极形态的在线策略！
-    else:  # args.policy == "qnet"
-        policy = QLearningPolicy(
-            search_param_configs=cfg["execution"]["search_param_configs"],
-            price_tiers=cfg["pricing"]["tiers"],
-            model_path="models/qnet_distilled_v1.pt",
-            temperature=0.1
-        )
-    # 
+        policy = LinUCBPolicy(z_cfgs, prices, alpha=1.0, temperature=0.5, seed=seed)
+    elif args.policy == "qnet":
+        policy = QLearningPolicy(z_cfgs, prices, model_path="models/qnet_distilled_v1.pt",
+                                 temperature=0.1)
+    elif args.policy == "fixed":
+        policy = FixedPolicy(z_cfgs, prices, default_z_index=2, default_p_index=2,
+                             epsilon=0.1, seed=seed)
+    elif args.policy == "sla":
+        policy = SLAHeuristicPolicy(z_cfgs, prices, seed=seed)
+    elif args.policy == "cost":
+        policy = CostBasedPolicy(z_cfgs, prices, cfg["cost_model"], margin=0.5, seed=seed)
+    elif args.policy == "naive_dqn":
+        policy = NaiveDQNPolicy(z_cfgs, prices, model_path="models/qnet_naive_dqn_v1.pt",
+                                temperature=0.1)
+    #
     execution = ExecutionAgent(index, cfg["cost_model"])
 
     # Output dirs

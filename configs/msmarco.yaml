@@ -3,7 +3,7 @@ dataset:
     path: data/msmarco
     dim: 384
     format: hdf5
-    file: msmarco-passage-384-euclidean.hdf5
+    file: msmarco-384-euclidean.hdf5    # also try: msmarco-passage-384-euclidean.hdf5
     max_base: 1000000           # use 1M subset for index (full set is 8.8M)
 
 index:

@@ -50,14 +50,17 @@ DATASETS = {
     },
     "msmarco": {
         "urls": [
+            "https://ann-benchmarks.com/msmarco-384-euclidean.hdf5",
+            "http://ann-benchmarks.com/msmarco-384-euclidean.hdf5",
             "https://ann-benchmarks.com/msmarco-passage-384-euclidean.hdf5",
             "http://ann-benchmarks.com/msmarco-passage-384-euclidean.hdf5",
+            "https://huggingface.co/datasets/erikbern/msmarco-passage/resolve/main/msmarco-passage-384-euclidean.hdf5",
         ],
         "dir": "data/msmarco",
-        "check_file": "msmarco-passage-384-euclidean.hdf5",
+        "check_file": "msmarco-384-euclidean.hdf5",   # also: msmarco-passage-384-euclidean.hdf5
         "size_estimate": "~8GB",
         "is_hdf5": True,
-        "help": "If download fails, try: huggingface.co/datasets/microsoft/msmarco",
+        "help": "Manual: download from https://huggingface.co/datasets/erikbern/msmarco-passage or https://www.kaggle.com/",
     },
 }
 
@@ -91,18 +94,26 @@ def download_dataset(name: str) -> None:
     cfg = DATASETS[name]
     os.makedirs(cfg["dir"], exist_ok=True)
 
+    # Check if any HDF5 file already exists in the directory
     check_path = os.path.join(cfg["dir"], cfg["check_file"])
-    if os.path.exists(check_path):
-        print(f"[{name}] already exists in {cfg['dir']}, skipping.")
+    alt_check = os.path.join(cfg["dir"], cfg["urls"][2].split("/")[-1]) if len(cfg["urls"]) > 2 else None
+    existing = os.path.exists(check_path)
+    if not existing and alt_check:
+        alt_path = os.path.join(cfg["dir"], cfg["urls"][2].split("/")[-1])
+        if os.path.exists(alt_path):
+            check_path = alt_path
+            existing = True
+    if existing:
+        print(f"[{name}] already exists in {cfg['dir']} ({os.path.basename(check_path)}), skipping.")
         return
-
-    archive_name = os.path.basename(cfg["urls"][0])
-    archive_path = os.path.join(cfg["dir"], archive_name)
 
     print(f"[{name}] downloading {cfg['size_estimate']}...")
     success = False
     last_error = None
+    archive_path = None
     for url in cfg["urls"]:
+        fname = os.path.basename(url)
+        archive_path = os.path.join(cfg["dir"], fname)
         try:
             download_file(url, archive_path)
             success = True
@@ -110,15 +121,21 @@ def download_dataset(name: str) -> None:
         except Exception as e:
             last_error = e
             print(f"  failed: {url}")
+            # Clean up partial download, try next URL
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
             continue
 
     if not success:
         print(f"\n  All URLs failed. Last error: {last_error}")
         print(f"  {cfg.get('help', 'Download manually and place files in ' + cfg['dir'])}")
-        # Clean up partial download
-        if os.path.exists(archive_path):
-            os.remove(archive_path)
         return
+
+    # Rename to expected check_file name if different
+    if os.path.basename(archive_path) != cfg["check_file"]:
+        expected_path = os.path.join(cfg["dir"], cfg["check_file"])
+        os.rename(archive_path, expected_path)
+        archive_path = expected_path
 
     is_hdf5 = cfg.get("is_hdf5", False)
     if not is_hdf5 and _is_tar_gz(archive_path):
