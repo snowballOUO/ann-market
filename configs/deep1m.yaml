@@ -37,8 +37,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 0.2            # normalized L2 for very similar vectors
-  worst_dist_anchor: 1.5           # normalized L2 for dissimilar vectors
+  best_dist_anchor: 0.28            # calibrated p10 over 5 seeds
+  worst_dist_anchor: 0.7             # calibrated p90 over 5 seeds
 
 logging:
   output_dir: logs

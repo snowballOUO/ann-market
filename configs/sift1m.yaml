@@ -35,8 +35,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 40000.0
-  worst_dist_anchor: 150000.0
+  best_dist_anchor: 30304.0       # calibrated p10 over 5 seeds
+  worst_dist_anchor: 74790.0       # calibrated p90 over 5 seeds
 
 logging:
   output_dir: logs
