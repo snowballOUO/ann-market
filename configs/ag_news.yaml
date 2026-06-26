@@ -35,8 +35,8 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 40000.0         # TODO: calibrate for 384-dim L2
-  worst_dist_anchor: 150000.0
+  best_dist_anchor: 0.3         # modified
+  worst_dist_anchor: 1.6
 
 logging:
   output_dir: logs
