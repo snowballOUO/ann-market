@@ -62,3 +62,60 @@ def causal_dr_bellman_loss(
     loss = torch.mean(clipped_rho * (td_error ** 2))
     
     return loss
+
+
+def ips_bellman_loss(
+    q_net: nn.Module,
+    states: torch.Tensor,
+    actions: torch.Tensor,
+    rewards: torch.Tensor,
+    next_states: torch.Tensor,
+    pi_b_probs: torch.Tensor,
+    gamma: float = 0.99,
+    clip_M: float = 50.0
+) -> torch.Tensor:
+    """
+    Naive IPS-weighted Bellman loss used for the no-DR ablation.
+    """
+    q_values = q_net(states)
+    q_sa = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+
+    with torch.no_grad():
+        next_q_values = q_net(next_states)
+        max_next_q, _ = next_q_values.max(dim=1)
+        target_q = rewards + gamma * max_next_q
+
+    weights = torch.clamp(1.0 / (pi_b_probs + 1e-8), max=clip_M)
+    td_error = target_q - q_sa
+    return torch.mean(weights * (td_error ** 2))
+
+
+def stable_bellman_loss(
+    q_net: nn.Module,
+    target_q_net: nn.Module,
+    states: torch.Tensor,
+    actions: torch.Tensor,
+    rewards: torch.Tensor,
+    next_states: torch.Tensor,
+    pi_b_probs: torch.Tensor,
+    gamma: float = 0.5,
+    clip_M: float = 50.0,
+) -> torch.Tensor:
+    """
+    Stable behavior-weighted Bellman loss for QNet training.
+
+    Unlike causal_dr_bellman_loss, this does not multiply the TD error by the
+    current model's pi_new(a|s). That keeps the model from changing its own
+    sample weights during training, which made the offline QNet seed-sensitive.
+    """
+    q_values = q_net(states)
+    q_sa = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+
+    with torch.no_grad():
+        next_q_values = target_q_net(next_states)
+        max_next_q, _ = next_q_values.max(dim=1)
+        target_q = rewards + gamma * max_next_q
+
+    weights = torch.clamp(1.0 / (pi_b_probs + 1e-8), max=clip_M)
+    td_loss = F.smooth_l1_loss(q_sa, target_q, reduction="none")
+    return torch.mean(weights * td_loss)

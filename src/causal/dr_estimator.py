@@ -14,11 +14,16 @@
 
   Also trains Q̂ and validates DR unbiasedness against online ground truth.
   """
+import ast
 import glob
 import os
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+
+
+LATENCY_SCALE_MS = 5.0
+SLA_SCALE_MS = 100.0
+BUDGET_SCALE_MILLI = 20.0
 
 def load_logs(log_dir:str) -> pd.DataFrame:
     """读取 parquet 日志目录，返回干净的 DataFrame。"""
@@ -36,13 +41,23 @@ def load_logs(log_dir:str) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _parse_history(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def build_state(df: pd.DataFrame) -> np.ndarray:
     """从日志构建 6 维特征，和 LinUCB._build_features() 完全一致。"""
     # h_t 在日志里是字符串（"{"recent_accept_rate": 0.69, ...}"）
-    # 需要用 eval 还原成 dict
-    h_parsed = df["h_t"].apply(
-        lambda x: eval(x) if isinstance(x, str) else {}
-    )
+    # 需要还原成 dict
+    h_parsed = df["h_t"].apply(_parse_history)
 
     s = np.column_stack([
         df["U_t"].values,  # [0]
@@ -55,6 +70,37 @@ def build_state(df: pd.DataFrame) -> np.ndarray:
         df["budget_t"].values * 1000,  # [5]
     ])
     return s.astype(np.float64)
+
+
+def normalize_qnet_state(raw_state: np.ndarray) -> np.ndarray:
+    """Normalize state features used by QNet training and QNet inference."""
+    state = raw_state.astype(np.float32, copy=True)
+    state[:, 2] = state[:, 2] / LATENCY_SCALE_MS
+    state[:, 4] = state[:, 4] / SLA_SCALE_MS
+    state[:, 5] = state[:, 5] / BUDGET_SCALE_MILLI
+    return state
+
+
+def make_qnet_state_features(query, U_t: float, h_t: dict, use_u_t: bool = True) -> np.ndarray:
+    raw = np.array(
+        [
+            U_t if use_u_t else 0.0,
+            h_t.get("recent_accept_rate", 0.5),
+            h_t.get("recent_mean_latency", 0.0) * 1000.0,
+            query.k_t / 100.0,
+            query.sla_t * 1000.0,
+            query.budget_t * 1000.0,
+        ],
+        dtype=np.float32,
+    )
+    return normalize_qnet_state(raw.reshape(1, -1))[0]
+
+
+def build_qnet_state(df: pd.DataFrame, use_u_t: bool = True) -> np.ndarray:
+    state = normalize_qnet_state(build_state(df))
+    if not use_u_t:
+        state[:, 0] = 0.0
+    return state
 
 def build_action_index(df:pd.DataFrame) -> np.ndarray:
     """z_nprobe 和 p_t → 0-24 的动作索引，和 LinUCB 的映射一致。"""
@@ -72,7 +118,12 @@ def build_action_index(df:pd.DataFrame) -> np.ndarray:
 
 
 class RewardModel:
-    """用 LightGBM 训练 Q(s, a) = E[r | s, a]"""
+    """Train Q(s, a) = E[r | s, a].
+
+    LightGBM is the preferred model for the paper experiments.  A Ridge
+    fallback keeps local tests and small offline checks usable when LightGBM is
+    not installed in the environment.
+    """
 
     def __init__(self):
         self.model = None
@@ -92,14 +143,21 @@ class RewardModel:
         # 拼接 → (N, 6+25=31)
         X = np.column_stack([S, A_onehot])
 
-        self.model = lgb.LGBMRegressor(
-            n_estimators=200,
-            max_depth=8,
-            num_leaves=127,
-            learning_rate=0.03,
-            verbose=-1,
-            random_state=42,
-        )
+        try:
+            import lightgbm as lgb
+
+            self.model = lgb.LGBMRegressor(
+                n_estimators=200,
+                max_depth=8,
+                num_leaves=127,
+                learning_rate=0.03,
+                verbose=-1,
+                random_state=42,
+            )
+        except ModuleNotFoundError:
+            from sklearn.linear_model import Ridge
+
+            self.model = Ridge(alpha=1e-6)
         self.model.fit(X, R)
         return self
 
@@ -260,5 +318,3 @@ def dr_estimate(
         "mean_rho": float(np.mean(rho)),
         "rho_p99": float(np.percentile(rho, 99)),
     }
-
-

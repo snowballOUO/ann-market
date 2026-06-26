@@ -29,6 +29,17 @@ from src.system.orchestrator import Orchestrator
 from src.system.types import Query
 from src.agents.q_learning_policy import QLearningPolicy
 
+
+def progress_iter(n_queries: int):
+    """Render a normal terminal progress bar on one dynamically refreshed line."""
+    return tqdm(
+        range(n_queries),
+        dynamic_ncols=True,
+        mininterval=0.5,
+        leave=True,
+    )
+
+
 def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
     """Wrap a raw vector into a Query with synthetic SLA/budget/k."""
     # Vary k, SLA and budget so the system sees a realistic mix
@@ -55,12 +66,18 @@ def main():
     ap.add_argument("--policy", type=str,
                     choices=["linucb", "qnet", "fixed", "sla", "cost", "naive_dqn"],
                     default="qnet", help="Which policy to run")
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--log-dir", default=None)
+    ap.add_argument("--qnet-model", default="models/qnet_distilled_v1.pt")
+    ap.add_argument("--qnet-temperature", type=float, default=0.03)
+    ap.add_argument("--shadow-rate", type=float, default=None)
+    ap.add_argument("--use-u-t", action=argparse.BooleanOptionalAction, default=True)
     # 
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
     n_queries = args.n_queries or cfg["experiment"]["n_queries"]
-    seed = cfg["experiment"]["seed"]
+    seed = args.seed if args.seed is not None else cfg["experiment"]["seed"]
 
     # --- Load data ---
     name = cfg["dataset"]["name"]
@@ -86,10 +103,23 @@ def main():
     z_cfgs = cfg["execution"]["search_param_configs"]
     prices = cfg["pricing"]["tiers"]
     if args.policy == "linucb":
-        policy = LinUCBPolicy(z_cfgs, prices, alpha=1.0, temperature=0.5, seed=seed)
+        policy = LinUCBPolicy(
+            z_cfgs,
+            prices,
+            alpha=1.0,
+            temperature=0.5,
+            seed=seed,
+            use_u_t=args.use_u_t,
+        )
     elif args.policy == "qnet":
-        policy = QLearningPolicy(z_cfgs, prices, model_path="models/qnet_distilled_v1.pt",
-                                 temperature=0.1)
+        policy = QLearningPolicy(
+            z_cfgs,
+            prices,
+            model_path=args.qnet_model,
+            temperature=args.qnet_temperature,
+            use_u_t=args.use_u_t,
+            seed=seed,
+        )
     elif args.policy == "fixed":
         policy = FixedPolicy(z_cfgs, prices, default_z_index=2, default_p_index=2,
                              epsilon=0.1, seed=seed)
@@ -105,13 +135,14 @@ def main():
 
     # Output dirs
     run_id = f"run_{int(time.time())}"
-    log_dir = os.path.join(cfg["logging"]["output_dir"], run_id)
+    log_dir = args.log_dir or os.path.join(cfg["logging"]["output_dir"], run_id)
     os.makedirs(log_dir, exist_ok=True)
     log_writer = LogWriter(log_dir, flush_every_n=cfg["logging"]["flush_every_n"])
 
+    shadow_rate = args.shadow_rate if args.shadow_rate is not None else cfg["shadow"]["sample_rate"]
     shadow = ShadowSampler(
         base_vectors=xb,
-        sample_rate=cfg["shadow"]["sample_rate"],
+        sample_rate=shadow_rate,
         max_workers=2,
         on_recall_computed=log_writer.record_recall,
         seed=seed,
@@ -133,7 +164,7 @@ def main():
     start = time.time()
     accept_count = 0
     revenue_total = 0.0
-    for i in tqdm(range(n_queries)):
+    for i in progress_iter(n_queries):
         v = xq[i % n_qv]
         q = build_query(i, v, rng)
         outcome = orch.handle_query(q, buyer)

@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from typing import Tuple
+from src.causal.dr_estimator import make_qnet_state_features
 from src.system.types import Query, Action
 
 class QLearningPolicy:
@@ -10,32 +11,26 @@ class QLearningPolicy:
         search_param_configs: list[dict],
         price_tiers: list[float],
         model_path: str = "models/qnet_distilled_v1.pt",
-        temperature: float = 0.1
+        temperature: float = 0.1,
+        use_u_t: bool = True,
+        seed: int = 42,
     ):
         self.configs = search_param_configs
         self.prices = price_tiers
         self.n_actions = len(self.configs) * len(self.prices)
         self.temperature = temperature
+        self.use_u_t = use_u_t
+        self.rng = np.random.default_rng(seed)
         
         # 加载蒸馏后的轻量级 TorchScript 模型，极速推理
         self.model = torch.jit.load(model_path)
         self.model.eval()
-        self.version = "qlearning-dr-v1"
+        self.version = f"qlearning-stable-v1-t{temperature:g}"
 
     def _extract_state(self, query: Query, U_t: float, h_t: dict) -> torch.Tensor:
-        """
-        构造状态向量。必须包含 U_t 以完成混淆消除 (Deconfounding)。
-        6 维特征，与 LinUCB._build_features() 和 dr_estimator.build_state() 完全一致。
-        """
-        state_features = [
-            U_t,                                          # [0] 查询难度
-            h_t.get("recent_accept_rate", 0.5),           # [1] 近期接受率
-            h_t.get("recent_mean_latency", 0.0) * 1000,   # [2] 近期延迟 (ms)
-            query.k_t / 100.0,                            # [3] 请求 k [0.1, 1.0]
-            query.sla_t * 1000,                           # [4] SLA (ms)
-            query.budget_t * 1000,                        # [5] 预算 (毫美元)
-        ]
-        return torch.tensor([state_features], dtype=torch.float32)
+        """Construct the normalized QNet state used during offline training."""
+        state_features = make_qnet_state_features(query, U_t, h_t, use_u_t=self.use_u_t)
+        return torch.from_numpy(state_features.reshape(1, -1).astype(np.float32))
 
     def decide(self, query: Query, U_t: float, h_t: dict) -> Tuple[Action, float, str]:
         """
@@ -54,7 +49,7 @@ class QLearningPolicy:
         probs = probs / probs.sum()
 
         # 根据 Q 值产生的概率分布进行采样
-        action_idx = np.random.choice(self.n_actions, p=probs)
+        action_idx = self.rng.choice(self.n_actions, p=probs)
         propensity = float(probs[action_idx])
 
         # 解码动作
