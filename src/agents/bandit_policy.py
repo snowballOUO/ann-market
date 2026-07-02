@@ -63,7 +63,7 @@ class LinUCBPolicy:
     ) -> np.ndarray:
         return np.array(
             [
-                U_t,# [0] 查询难度 [0,1]
+                U_t * 100.0,# [0] 查询难度 (缩放到与其他特征同量级)
                 h_t.get("recent_accept_rate", 0.5),# [1] 近期接受率 [0,1]
                 h_t.get("recent_mean_latency", 0.0)*1000,# [2] 近期延迟 (ms)
                 query.k_t/100.0,# [3] 请求 k [0.1,1.0]

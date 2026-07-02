@@ -31,13 +31,15 @@ class LinUCBPolicyEvaluator:
         self.temperature = policy.temperature
 
     def action_probs(self, s: np.ndarray) -> np.ndarray:
-        """Given state s (6,), return softmax probs over 25 actions."""
+        """Given state s (6,) — LinUCB uses 6-dim features (no sentiment)."""
+        # Ensure 6-dim input even if full 7-dim state is passed
+        s6 = s[:6].astype(np.float64)
         ucbs = np.zeros(self.n_actions)
         for a in range(self.n_actions):
             A_inv = np.linalg.inv(self.policy.A[a])
             theta = A_inv @ self.policy.b[a]
-            point_est = float(theta @ s)
-            bonus = self.policy.alpha * np.sqrt(float(s @ A_inv @ s))
+            point_est = float(theta @ s6)
+            bonus = self.policy.alpha * np.sqrt(float(s6 @ A_inv @ s6))
             ucbs[a] = point_est + bonus
         ucbs_shifted = ucbs - ucbs.max()
         exp_ucbs = np.exp(ucbs_shifted / self.temperature)
@@ -45,7 +47,7 @@ class LinUCBPolicyEvaluator:
         return probs.astype(np.float64)
 
     def get_action_probs_batch(self, S: np.ndarray) -> np.ndarray:
-        """Batch version: (N, 6) → (N, 25)."""
+        """Batch version: (N, 7) → (N, 25). Slices to 6-dim for LinUCB."""
         probs = np.zeros((len(S), self.n_actions), dtype=np.float64)
         for i in range(len(S)):
             probs[i] = self.action_probs(S[i])

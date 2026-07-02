@@ -1,6 +1,8 @@
 import os
 import math
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
@@ -39,20 +41,20 @@ def main():
         "figure.autolayout": True
     })
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=300)
-    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=200)
+
     # ---------------------------------------------------------
     # 图 1: BudgetBuyer (价格敏感)
-    # 冻结条件: latency = 0.05 (良好), recall = 0.9 (良好)
+    # 冻结: latency=0.0015 (nprobe=32), recall=0.88
     # ---------------------------------------------------------
     prices = np.linspace(0.001, 0.020, 100)
-    probs_price = [calculate_accept_prob(budget_buyer, p, 0.05, 0.9) * 100 for p in prices]
-    
+    probs_price = [calculate_accept_prob(budget_buyer, p, 0.0015, 0.88) * 100 for p in prices]
+
     ax = axes[0]
     ax.plot(prices, probs_price, color='#2ca02c', linewidth=2.5)
-    ax.axvline(x=budget_buyer.theta_price, color='gray', linestyle='--', label=f'Threshold (θ={budget_buyer.theta_price})')
+    ax.axvline(x=budget_buyer.theta_price, color='gray', linestyle='--', label=f'θ={budget_buyer.theta_price}')
     ax.set_title("BudgetBuyer: Price Sensitivity")
-    ax.set_xlabel("Price ($p_t$)")
+    ax.set_xlabel("Price ($)")
     ax.set_ylabel("Accept Rate (%)")
     ax.set_ylim(0, 105)
     ax.legend()
@@ -60,32 +62,36 @@ def main():
 
     # ---------------------------------------------------------
     # 图 2: LatencyBuyer (延迟敏感)
-    # 冻结条件: price = 0.01 (中等), recall = 0.9 (良好)
+    # 冻结: price=0.01, recall=0.88 — 延迟扫描 0.3ms~6ms
     # ---------------------------------------------------------
-    latencies = np.linspace(0.005, 0.100, 100)
-    probs_lat = [calculate_accept_prob(latency_buyer, 0.01, L, 0.9) * 100 for L in latencies]
-    
+    latencies = np.linspace(0.0003, 0.006, 100)
+    probs_lat = [calculate_accept_prob(latency_buyer, 0.01, L, 0.88) * 100 for L in latencies]
+
     ax = axes[1]
-    ax.plot(latencies, probs_lat, color='#d62728', linewidth=2.5)
-    ax.axvline(x=latency_buyer.theta_latency, color='gray', linestyle='--', label=f'Threshold (θ={latency_buyer.theta_latency})')
+    ax.plot(latencies * 1000, probs_lat, color='#d62728', linewidth=2.5)  # ms
+    ax.axvline(x=latency_buyer.theta_latency * 1000, color='gray', linestyle='--',
+               label=f'θ={latency_buyer.theta_latency*1000:.1f}ms')
     ax.set_title("LatencyBuyer: Latency Sensitivity")
-    ax.set_xlabel("Latency (Seconds)")
+    ax.set_xlabel("Latency (ms)")
+    ax.set_ylabel("Accept Rate (%)")
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)
 
     # ---------------------------------------------------------
     # 图 3: QualityBuyer (召回率敏感)
-    # 冻结条件: price = 0.01 (中等), latency = 0.05 (良好)
+    # 冻结: price=0.01, latency=0.0028 (nprobe=64)
     # ---------------------------------------------------------
     recalls = np.linspace(0.0, 1.0, 100)
-    probs_rec = [calculate_accept_prob(quality_buyer, 0.01, 0.05, R) * 100 for R in recalls]
-    
+    probs_rec = [calculate_accept_prob(quality_buyer, 0.01, 0.0028, R) * 100 for R in recalls]
+
     ax = axes[2]
     ax.plot(recalls, probs_rec, color='#1f77b4', linewidth=2.5)
-    ax.axvline(x=quality_buyer.theta_recall, color='gray', linestyle='--', label=f'Threshold (θ={quality_buyer.theta_recall})')
+    ax.axvline(x=quality_buyer.theta_recall, color='gray', linestyle='--',
+               label=f'θ={quality_buyer.theta_recall}')
     ax.set_title("QualityBuyer: Recall Sensitivity")
-    ax.set_xlabel("Perceived Recall ($Q$)")
+    ax.set_xlabel("Perceived Recall")
+    ax.set_ylabel("Accept Rate (%)")
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)

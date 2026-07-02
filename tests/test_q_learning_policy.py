@@ -72,5 +72,5 @@ def test_q_learning_policy_uses_normalized_qnet_state(monkeypatch):
         h_t={"recent_accept_rate": 0.8, "recent_mean_latency": 0.002},
     )
 
-    expected = torch.tensor([[0.4, 0.8, 0.4, 0.5, 1.0, 1.0]], dtype=torch.float32)
+    expected = torch.tensor([[40.0, 0.8, 0.4, 0.5, 1.0, 1.0, 0.8]], dtype=torch.float32)
     assert torch.allclose(state, expected)

@@ -33,7 +33,7 @@ from src.system.orchestrator import Orchestrator
 from src.system.types import Query
 
 
-def build_query(qid: int, v: np.ndarray, rng: np.random.Generator, profile=None) -> Query:
+def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
     k = int(rng.choice([10, 20, 50, 100]))
     sla = float(rng.choice([0.020, 0.050, 0.100]))
     budget = float(rng.choice([0.005, 0.010, 0.020]))
@@ -61,8 +61,7 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed, gt=None):
 
     for i in tqdm(range(n_queries), desc=policy.version, leave=False):
         v = xq[i % n_qv]
-        profile = buyer.get_profile(seed + i)
-        q = build_query(i, v, rng, profile)
+        q = build_query(i, v, rng)
         buyer.rng = np.random.default_rng(seed + i)
 
         outcome = orch.handle_query(q, buyer, gt_ids=gt[i % len(gt)] if gt is not None else None)
@@ -92,7 +91,7 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed, gt=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--config", required=True)
     ap.add_argument("--n-queries", type=int, default=10000)
     ap.add_argument("--index-path", default=None)
     ap.add_argument("--alpha", type=float, default=0.3)

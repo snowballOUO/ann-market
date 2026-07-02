@@ -40,7 +40,7 @@ def progress_iter(n_queries: int):
     )
 
 
-def build_query(qid: int, v: np.ndarray, rng: np.random.Generator, profile=None) -> Query:
+def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
     """Wrap a raw vector into a Query with synthetic SLA/budget/k."""
     k = int(rng.choice([10, 20, 50, 100]))
     sla = float(rng.choice([0.020, 0.050, 0.100]))
@@ -57,7 +57,7 @@ def build_query(qid: int, v: np.ndarray, rng: np.random.Generator, profile=None)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--config", required=True)
     ap.add_argument("--n-queries", type=int, default=None)
     ap.add_argument("--index-path", default=None)
     ap.add_argument("--epsilon", type=float, default=0.1, help="Epsilon for FixedPolicy exploration")
@@ -167,8 +167,7 @@ def main():
     revenue_total = 0.0
     for i in progress_iter(n_queries):
         v = xq[i % n_qv]
-        profile = buyer.get_profile(seed + i)
-        q = build_query(i, v, rng, profile)
+        q = build_query(i, v, rng)
         buyer.rng = np.random.default_rng(seed + i)
         outcome = orch.handle_query(q, buyer, gt_ids=gt[i % len(gt)] if gt is not None else None)
         # ── 新增：LinUCB 在线学习 ──

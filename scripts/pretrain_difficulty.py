@@ -29,26 +29,21 @@ def extract_features(query,sample_vectors,global_mean_norm):
     #特征1：范数偏离全局均值的程度
     norm=float(np.linalg.norm(v))
     norm_ratio=min(norm/max(global_mean_norm,1e-6),3.0)/3.0
-    # 范围 [0, 1]，偏离中心越远越接近 1
 
     # 特征 2：局部密度——到最近参考向量的距离
     dists=np.linalg.norm(sample_vectors[:1000]-v, axis=1)
     nearest=float(np.min(dists))
     density=min(nearest/max(global_mean_norm,1e-6),1.0)
-    # 范围 [0, 1]，越稀疏越接近 1
 
     #特征3：filter复杂度
     n_filter_keys=len(query.filter_t) if query.filter_t else 0
     filter_diff=min(n_filter_keys*0.2,0.6)
-    # 范围 [0, 0.6]，SIFT1M 无 filter 所以始终 0
 
     # 特征 4：请求的 k（归一化）
     k_norm=min(query.k_t/100.0,1.0)
-    # 范围 [0.1, 1.0]
 
-    # 特征 5：SLA 紧密程度（SLA 越紧，搜索越难——不能慢慢翻）
+    # 特征 5：SLA 紧密程度
     sla_norm=1.0-min(query.sla_t/0.1,1.0)
-    # 范围 [0, 1]，SLA 越紧越接近 1
 
     # 特征 6：偏置项
     bias=1.0
@@ -60,43 +55,37 @@ def extract_features(query,sample_vectors,global_mean_norm):
 
 def generate_labels(xq,gt,index,n_queries=10000):
     """
-          对每条查询跑 FAISS nprobe=16，和 ground truth 比对得 recall。
-          true_difficulty = 1.0 - recall@k
+    对每条查询跑 nprobe=32，label = recall@32 —— 绝对召回率。
+    U_t 直接回答"选 nprobe=32 会拿到多少 recall"。
+    高值 = nprobe=32 够用，低值 = 必须升 nprobe。
     """
-    index.nprobe=16
     labels=np.zeros(n_queries,dtype=np.float32)
+    k_t=10
+    index.nprobe=32
 
     for i in tqdm(range(n_queries),desc="Generating labels for query"):
         v=xq[i].reshape(1,-1).astype(np.float32)
-        k_t=10 # SIFT1M 默认 k=10
-
-        #ANN搜索
-        k_search=min(k_t*4,200)
-        D,I=index.search(v, k_search)
-        aprox_ids=I[0][:k_t]
-
-        # 和 ground truth 比对
         true_ids=gt[i][:k_t]
-        approx_set=set(int(x) for x in aprox_ids)
         true_set=set(int(x) for x in true_ids)
-        recall=len(approx_set & true_set)/len(true_set)
+        k_search=min(k_t*4,200)
 
-        labels[i]=1.0-recall
+        D,I=index.search(v, k_search)
+        recall=len(set(int(x) for x in I[0][:k_t]) & true_set)/len(true_set)
+        labels[i]=recall
 
     return labels
 
 class DifficultyMLP(nn.Module):
-    """3-layer MLP: 6 → 64 → 64 → 1 (sigmoid output)."""
+    """3-layer MLP: 6 → 64 → 64 → 1 (linear output, marginal gain)."""
     def __init__(self,input_dim=6,hidden=64):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim,hidden),  # 6×64 + 64 = 448 参数
+            nn.Linear(input_dim,hidden),
             nn.ReLU(),
-            nn.Linear(hidden,hidden), # 64×64 + 64 = 4160 参数
+            nn.Linear(hidden,hidden),
             nn.ReLU(),
-            nn.Linear(hidden,1), # 64×1 + 1 = 65 参数
-            nn.Sigmoid(), # 输出压缩到 [0, 1]
-        )# 总参数：4673
+            nn.Linear(hidden,1),
+        )
 
     def forward(self, x):
         return self.net(x).squeeze(-1)  # (batch, 1) → (batch,)
@@ -182,7 +171,7 @@ def validate_onnx(onnx_path="models/difficulty_v1.onnx",n_warmup=100,n_test=1000
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--config", required=True)
     ap.add_argument("--output-dir", default="models", help="Dir for difficulty_v1.pt/.onnx")
     args=ap.parse_args()
 

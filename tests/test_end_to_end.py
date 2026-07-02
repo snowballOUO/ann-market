@@ -122,7 +122,7 @@ def test_end_to_end_with_qnet(tmp_path):
     cost_model = {"base_per_ms": 0.00005, "fixed_overhead": 0.0001}
 
     # ── Create a synthetic Q-net model (random weights) for testing ──
-    state_dim = 6
+    state_dim = 7
     n_actions = len(configs) * len(prices)  # 6
     synthetic_qnet = LargeQNet(state_dim, n_actions)
     model_path = str(tmp_path / "test_qnet.pt")

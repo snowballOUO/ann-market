@@ -18,7 +18,7 @@ class SmallQNet(nn.Module):
         return self.net(state)
 
 def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader,
-                   state_dim: int, epochs: int = 10):
+                   state_dim: int, epochs: int = 10, output_path: str = None):
     """
     将 LargeQNet 的知识蒸馏到 SmallQNet。
     """
@@ -45,4 +45,5 @@ def distill_q_net(teacher: nn.Module, student: nn.Module, dataloader,
     student.eval()
     dummy_input = torch.randn(1, state_dim)
     traced_script_module = torch.jit.trace(student, dummy_input)
-    traced_script_module.save("models/qnet_distilled_v1.pt")
+    output = output_path or "models/qnet_distilled_v1.pt"
+    traced_script_module.save(output)

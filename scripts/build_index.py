@@ -19,7 +19,7 @@ from src.data.datasets import load_dataset
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--config", required=True)
     ap.add_argument("--output", default=None, help="output index path")
     args = ap.parse_args()
 

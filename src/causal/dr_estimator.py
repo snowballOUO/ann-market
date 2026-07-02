@@ -54,13 +54,11 @@ def _parse_history(value):
 
 
 def build_state(df: pd.DataFrame) -> np.ndarray:
-    """从日志构建 6 维特征，和 LinUCB._build_features() 完全一致。"""
-    # h_t 在日志里是字符串（"{"recent_accept_rate": 0.69, ...}"）
-    # 需要还原成 dict
+    """从日志构建 7 维特征（前 6 维与 LinUCB 一致，第 7 维是 market_sentiment）。"""
     h_parsed = df["h_t"].apply(_parse_history)
 
     s = np.column_stack([
-        df["U_t"].values,  # [0]
+        df["U_t"].values * 100.0,  # [0] scaled to match other feature magnitudes
         h_parsed.apply(lambda d: d.get("recent_accept_rate", 0.5)).values,  # [1]
         h_parsed.apply(
             lambda d: d.get("recent_mean_latency", 0.0) * 1000  # [2]
@@ -68,6 +66,8 @@ def build_state(df: pd.DataFrame) -> np.ndarray:
         df["k_t"].values / 100.0,  # [3]
         df["sla_t"].values * 1000,  # [4]
         df["budget_t"].values * 1000,  # [5]
+        df["market_sentiment"].values if "market_sentiment" in df.columns
+        else np.full(len(df), 0.8),  # [6] MDP state: buyer sentiment
     ])
     return s.astype(np.float64)
 
@@ -81,15 +81,17 @@ def normalize_qnet_state(raw_state: np.ndarray) -> np.ndarray:
     return state
 
 
-def make_qnet_state_features(query, U_t: float, h_t: dict, use_u_t: bool = True) -> np.ndarray:
+def make_qnet_state_features(query, U_t: float, h_t: dict, use_u_t: bool = True,
+                              sentiment: float = 0.8) -> np.ndarray:
     raw = np.array(
         [
-            U_t if use_u_t else 0.0,
+            (U_t if use_u_t else 0.0) * 100.0,  # scaled to feature magnitude
             h_t.get("recent_accept_rate", 0.5),
             h_t.get("recent_mean_latency", 0.0) * 1000.0,
             query.k_t / 100.0,
             query.sla_t * 1000.0,
             query.budget_t * 1000.0,
+            sentiment,  # [6] MDP state
         ],
         dtype=np.float32,
     )
@@ -100,6 +102,7 @@ def build_qnet_state(df: pd.DataFrame, use_u_t: bool = True) -> np.ndarray:
     state = normalize_qnet_state(build_state(df))
     if not use_u_t:
         state[:, 0] = 0.0
+    # [6] sentiment already in build_state, no extra handling needed
     return state
 
 def build_action_index(df:pd.DataFrame) -> np.ndarray:

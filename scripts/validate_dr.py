@@ -49,7 +49,7 @@ class PolicyWrapper:
     def _build_features(self, query, U_t, h_t):
         """和 LinUCB._build_features() 完全一样。"""
         return np.array([
-            U_t,
+            U_t * 100.0,
             h_t.get("recent_accept_rate", 0.5),
             h_t.get("recent_mean_latency", 0.0) * 1000,
             query.k_t / 100.0,
@@ -94,17 +94,13 @@ def online_evaluate(
     for i in tqdm(range(n_queries), desc=policy_wrapper.version, leave=False):
         v = xq[i % n_qv]
 
-        # 构造查询（和 run_experiment 一样）
         k = int(rng.choice([10, 20, 50, 100]))
         sla = float(rng.choice([0.020, 0.050, 0.100]))
         budget = float(rng.choice([0.005, 0.010, 0.020]))
         q = Query(id=f"q_{i:06d}", v_t=v.copy(),
                   k_t=k, filter_t={}, sla_t=sla, budget_t=budget)
 
-        # 重置 buyer（保证和 DR 日志中的 buyer 行为分布一致）
         buyer.rng = np.random.default_rng(seed + i)
-        if hasattr(buyer, 'market_sentiment'):
-            buyer.market_sentiment = 0.8
 
         outcome = orchestrator.handle_query(q, buyer)
         total_revenue += outcome.R_t
@@ -147,7 +143,7 @@ def offline_evaluate(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--config", required=True)
     ap.add_argument("--log-dir", required=True)
     ap.add_argument("--n-queries", type=int, default=5000)
     ap.add_argument("--index-path", default=None)
@@ -171,6 +167,7 @@ def main():
         seed=seed,
         best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
         worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
+        nprobe_recall=cfg.get("buyer", {}).get("nprobe_recall"),
     )
 
     z_configs = cfg["execution"]["search_param_configs"]

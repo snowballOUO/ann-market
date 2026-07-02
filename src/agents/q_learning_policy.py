@@ -28,8 +28,10 @@ class QLearningPolicy:
         self.version = f"qlearning-stable-v1-t{temperature:g}"
 
     def _extract_state(self, query: Query, U_t: float, h_t: dict) -> torch.Tensor:
-        """Construct the normalized QNet state used during offline training."""
-        state_features = make_qnet_state_features(query, U_t, h_t, use_u_t=self.use_u_t)
+        """Construct the normalized 7-dim QNet state (includes market sentiment)."""
+        sentiment = h_t.get("market_sentiment", 0.8)
+        state_features = make_qnet_state_features(query, U_t, h_t, use_u_t=self.use_u_t,
+                                                   sentiment=sentiment)
         return torch.from_numpy(state_features.reshape(1, -1).astype(np.float32))
 
     def decide(self, query: Query, U_t: float, h_t: dict) -> Tuple[Action, float, str]:

@@ -28,16 +28,11 @@ class NaiveDQNPolicy:
         self.version = "naive-dqn-v1"
 
     def _extract_state(self, query: Query, U_t: float, h_t: dict) -> torch.Tensor:
-        """6-dim state with U_t replaced by 0 (no deconfounding)."""
-        state_features = [
-            0.0,                                          # [0] U_t removed
-            h_t.get("recent_accept_rate", 0.5),           # [1]
-            h_t.get("recent_mean_latency", 0.0) * 1000,   # [2]
-            query.k_t / 100.0,                            # [3]
-            query.sla_t * 1000,                           # [4]
-            query.budget_t * 1000,                        # [5]
-        ]
-        return torch.tensor([state_features], dtype=torch.float32)
+        """7-dim state with U_t replaced by 0, using same normalisation as QLearningPolicy."""
+        from src.causal.dr_estimator import make_qnet_state_features
+        sentiment = h_t.get("market_sentiment", 0.8)
+        feats = make_qnet_state_features(query, U_t, h_t, use_u_t=False, sentiment=sentiment)
+        return torch.from_numpy(feats.reshape(1, -1).astype(np.float32))
 
     def decide(self, query: Query, U_t: float, h_t: dict) -> Tuple[Action, float, str]:
         state_tensor = self._extract_state(query, U_t, h_t)

@@ -167,6 +167,7 @@ def main():
             DataLoader(states_t, batch_size=args.batch_size),
             state_dim=state_dim,
             epochs=args.distill_epochs,
+            output_path=None,  # save handled by caller
         )
     else:
         print("4. 跳过蒸馏，直接导出 LargeQNet TorchScript...")

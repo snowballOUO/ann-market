@@ -53,7 +53,8 @@ class Trajectory:
     propensity: float          # pi(a|s) at decision time — CRITICAL for off-policy learning
     policy_version: str
     outcome: Outcome
-    timestamp: float           # unix seconds, decision time
+    market_sentiment: float = 0.8  # buyer market sentiment after this query (MDP state)
+    timestamp: float = 0.0     # unix seconds, decision time
 
     def flatten_for_log(self) -> dict:
         """Flatten into a dict suitable for parquet."""
@@ -78,5 +79,6 @@ class Trajectory:
             "S_t": self.outcome.S_t,
             "R_t": self.outcome.R_t,
             "sla_violated": self.outcome.sla_violated,
+            "market_sentiment": self.market_sentiment,
             "timestamp": self.timestamp,
         }
