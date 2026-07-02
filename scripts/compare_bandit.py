@@ -33,7 +33,7 @@ from src.system.orchestrator import Orchestrator
 from src.system.types import Query
 
 
-def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
+def build_query(qid: int, v: np.ndarray, rng: np.random.Generator, profile=None) -> Query:
     k = int(rng.choice([10, 20, 50, 100]))
     sla = float(rng.choice([0.020, 0.050, 0.100]))
     budget = float(rng.choice([0.005, 0.010, 0.020]))
@@ -47,7 +47,7 @@ def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
     )
 
 
-def run_policy(policy, orch, buyer, xq, n_queries, seed):
+def run_policy(policy, orch, buyer, xq, n_queries, seed, gt=None):
     """Run N queries, return cumulative revenue and per-query metrics."""
     rng = np.random.default_rng(seed)
     n_qv = xq.shape[0]
@@ -61,13 +61,11 @@ def run_policy(policy, orch, buyer, xq, n_queries, seed):
 
     for i in tqdm(range(n_queries), desc=policy.version, leave=False):
         v = xq[i % n_qv]
-        q = build_query(i, v, rng)
-
+        profile = buyer.get_profile(seed + i)
+        q = build_query(i, v, rng, profile)
         buyer.rng = np.random.default_rng(seed + i)
-        if hasattr(buyer, 'market_sentiment'):
-            buyer.market_sentiment = 0.8
 
-        outcome = orch.handle_query(q, buyer)
+        outcome = orch.handle_query(q, buyer, gt_ids=gt[i % len(gt)] if gt is not None else None)
 
         if hasattr(policy, 'update'):
             policy.update(outcome.R_t)
@@ -97,11 +95,11 @@ def main():
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--n-queries", type=int, default=10000)
     ap.add_argument("--index-path", default=None)
-    ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument("--alpha", type=float, default=0.3)
     ap.add_argument("--temperature", type=float, default=0.5)
     ap.add_argument("--qnet-temp", type=float, default=0.1)
     ap.add_argument("--output-dir", default="reports/figs")
-    ap.add_argument("--mlp", action="store_true", help="Use MLP difficulty estimator")
+    ap.add_argument("--mlp", action=argparse.BooleanOptionalAction, default=True, help="Use MLP difficulty estimator")
     ap.add_argument("--margin", type=float, default=20.0,
                     help="Cost-based pricing margin (default: 20 = 2000%%)")
     ap.add_argument("--seed", type=int, default=None,
@@ -110,14 +108,16 @@ def main():
                     help="Path to Q-Net distilled model")
     ap.add_argument("--naive-dqn-model", default=None,
                     help="Path to Naive DQN distilled model")
+    ap.add_argument("--naive-dr-model", default=None,
+                    help="Path to Naive DR distilled model")
     ap.add_argument("--no-plot", action="store_true", help="Skip plot generation")
     ap.add_argument("--results-json", default=None, help="Write results to JSON file")
     ap.add_argument("--policies", type=str, default="fixed,linucb,qnet",
-                    help="Comma-separated list: fixed,linucb,qnet,sla,cost,naive_dqn")
+                    help="Comma-separated list: fixed,linucb,qnet,sla,cost,naive_dqn,naive_dr")
     args = ap.parse_args()
 
     selected = [p.strip() for p in args.policies.split(",")]
-    valid = {"fixed", "linucb", "qnet", "sla", "cost", "naive_dqn"}
+    valid = {"fixed", "linucb", "qnet", "sla", "cost", "naive_dqn", "naive_dr"}
     for p in selected:
         if p not in valid:
             raise ValueError(f"Unknown policy '{p}'. Choices: {valid}")
@@ -147,6 +147,7 @@ def main():
         seed=seed,
         best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
         worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
+        nprobe_recall=cfg.get("buyer", {}).get("nprobe_recall"),
     )
     log_dir = cfg["logging"]["output_dir"]
     z_configs = cfg["execution"]["search_param_configs"]
@@ -198,7 +199,7 @@ def main():
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
             orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-            r = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            r = run_policy(policy, orch, buyer, xq, n_queries, seed, gt=gt)
             shadow.drain(); shadow.shutdown(); log_writer.close()
             results["qnet"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
          "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
@@ -249,12 +250,32 @@ def main():
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
             orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
-            r = run_policy(policy, orch, buyer, xq, n_queries, seed)
+            r = run_policy(policy, orch, buyer, xq, n_queries, seed, gt=gt)
             shadow.drain(); shadow.shutdown(); log_writer.close()
             results["naive_dqn"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
          "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
          "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
                                     "label": "Naive DQN (no U_t)"}
+
+    if "naive_dr" in selected:
+        model_path = args.naive_dr_model or "models/qnet_naive_dr_v1.pt"
+        if not os.path.exists(model_path):
+            print(f"\n  Naive DR model not found. Train with: --no-use-u-t --reward-mode ips")
+        else:
+            from src.agents.naive_dqn_policy import NaiveDQNPolicy
+            print("\n=== Naive DR (No U_t, IPS) ===")
+            policy = NaiveDQNPolicy(z_configs, price_tiers, model_path=model_path,
+                                    temperature=args.qnet_temp)
+            log_writer = LogWriter(os.path.join(log_dir, "cmp_naive_dr"), flush_every_n=1000)
+            shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
+                                   max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
+            orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ContextCache(100))
+            r = run_policy(policy, orch, buyer, xq, n_queries, seed, gt=gt)
+            shadow.drain(); shadow.shutdown(); log_writer.close()
+            results["naive_dr"] = {"cum": r["cum"], "ar": r["accept_rate"], "rev": r["total_rev"],
+         "avg_price": r["avg_price"], "sla_violation": r["sla_violation_rate"],
+         "mean_recall": r["mean_recall"], "avg_cost": r["avg_cost"],
+                                   "label": "Naive DR (no U_t, IPS)"}
 
     if not results:
         print("No policies ran.")
@@ -283,7 +304,7 @@ def main():
     # ── Plot ──
     if not args.no_plot:
         colors = {"fixed": "#1f77b4", "linucb": "#ff7f0e", "qnet": "#2ca02c",
-                  "sla": "#d62728", "cost": "#9467bd", "naive_dqn": "#8c564b"}
+                  "sla": "#d62728", "cost": "#9467bd", "naive_dqn": "#8c564b", "naive_dr": "#e377c2"}
         os.makedirs(args.output_dir, exist_ok=True)
         fig, ax = plt.subplots(figsize=(11, 6))
         queries = np.arange(1, n_queries + 1)

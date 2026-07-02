@@ -32,14 +32,15 @@ class Orchestrator:
         self.log = log_writer
         self.ctx = context_cache or ContextCache()
 
-    def handle_query(self, query: Query, buyer) -> Outcome:
+    def handle_query(self, query: Query, buyer, gt_ids=None) -> Outcome:
         t_decision = time.time()
 
         # 1. Difficulty
         U_t = self.difficulty.estimate(query)
 
-        # 2. Context
+        # 2. Context (include market sentiment for Q-Net MDP state)
         h_t = self.ctx.get_features()
+        h_t["market_sentiment"] = getattr(buyer, 'market_sentiment', 0.8)
 
         # 3. Policy decision
         action, propensity, policy_version = self.policy.decide(query, U_t, h_t)
@@ -53,7 +54,9 @@ class Orchestrator:
             self.shadow.maybe_sample(query, results)
 
         # 6. Buyer responds
-        A_t, S_t = buyer.respond(query, results, action.p_t, L_t)
+        nprobe = action.z_t.get("nprobe", 32)
+        A_t, S_t = buyer.respond(query, results, action.p_t, L_t, nprobe=nprobe,
+                                  gt_ids=gt_ids)
 
         # 7. Revenue
         R_t = (action.p_t - C_t) if A_t else (-C_t)
@@ -78,6 +81,7 @@ class Orchestrator:
             propensity=propensity,
             policy_version=policy_version,
             outcome=outcome,
+            market_sentiment=getattr(buyer, 'market_sentiment', 0.8),
             timestamp=t_decision,
         )
         self.log.write_async(traj)

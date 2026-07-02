@@ -40,13 +40,11 @@ def progress_iter(n_queries: int):
     )
 
 
-def build_query(qid: int, v: np.ndarray, rng: np.random.Generator) -> Query:
+def build_query(qid: int, v: np.ndarray, rng: np.random.Generator, profile=None) -> Query:
     """Wrap a raw vector into a Query with synthetic SLA/budget/k."""
-    # Vary k, SLA and budget so the system sees a realistic mix
     k = int(rng.choice([10, 20, 50, 100]))
-    sla = float(rng.choice([0.020, 0.050, 0.100]))   # 20, 50, 100 ms
+    sla = float(rng.choice([0.020, 0.050, 0.100]))
     budget = float(rng.choice([0.005, 0.010, 0.020]))
-    # No filter in SIFT1M (no metadata); pass empty dict
     return Query(
         id=f"q_{qid:06d}",
         v_t=v,
@@ -62,6 +60,7 @@ def main():
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--n-queries", type=int, default=None)
     ap.add_argument("--index-path", default=None)
+    ap.add_argument("--epsilon", type=float, default=0.1, help="Epsilon for FixedPolicy exploration")
     # add policy arg
     ap.add_argument("--policy", type=str,
                     choices=["linucb", "qnet", "fixed", "sla", "cost", "naive_dqn"],
@@ -70,6 +69,8 @@ def main():
     ap.add_argument("--log-dir", default=None)
     ap.add_argument("--qnet-model", default="models/qnet_distilled_v1.pt")
     ap.add_argument("--qnet-temperature", type=float, default=0.03)
+    ap.add_argument("--linucb-alpha", type=float, default=1.0)
+    ap.add_argument("--linucb-temperature", type=float, default=0.5)
     ap.add_argument("--shadow-rate", type=float, default=None)
     ap.add_argument("--use-u-t", action=argparse.BooleanOptionalAction, default=True)
     # 
@@ -106,10 +107,9 @@ def main():
         policy = LinUCBPolicy(
             z_cfgs,
             prices,
-            alpha=1.0,
-            temperature=0.5,
+            alpha=args.linucb_alpha,
+            temperature=args.linucb_temperature,
             seed=seed,
-            use_u_t=args.use_u_t,
         )
     elif args.policy == "qnet":
         policy = QLearningPolicy(
@@ -122,7 +122,7 @@ def main():
         )
     elif args.policy == "fixed":
         policy = FixedPolicy(z_cfgs, prices, default_z_index=2, default_p_index=2,
-                             epsilon=0.1, seed=seed)
+                             epsilon=args.epsilon, seed=seed)
     elif args.policy == "sla":
         policy = SLAHeuristicPolicy(z_cfgs, prices, seed=seed)
     elif args.policy == "cost":
@@ -152,6 +152,7 @@ def main():
         seed=seed,
         best_dist_anchor=cfg.get("buyer", {}).get("best_dist_anchor", 40000.0),
         worst_dist_anchor=cfg.get("buyer", {}).get("worst_dist_anchor", 150000.0),
+        nprobe_recall=cfg.get("buyer", {}).get("nprobe_recall"),
     )
     ctx = ContextCache(window_size=100)
     orch = Orchestrator(diff_est, policy, execution, shadow, log_writer, ctx)
@@ -166,8 +167,10 @@ def main():
     revenue_total = 0.0
     for i in progress_iter(n_queries):
         v = xq[i % n_qv]
-        q = build_query(i, v, rng)
-        outcome = orch.handle_query(q, buyer)
+        profile = buyer.get_profile(seed + i)
+        q = build_query(i, v, rng, profile)
+        buyer.rng = np.random.default_rng(seed + i)
+        outcome = orch.handle_query(q, buyer, gt_ids=gt[i % len(gt)] if gt is not None else None)
         # ── 新增：LinUCB 在线学习 ──
         # policy.update(outcome.R_t)
         if hasattr(policy, 'update'): policy.update(outcome.R_t)
