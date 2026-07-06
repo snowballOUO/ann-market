@@ -1,0 +1,66 @@
+# Heterogeneous marketplace experiment config
+# Beat Fixed by exploiting buyer/query heterogeneity
+
+dataset:
+  name: sift1m
+  path: data/sift1m
+  dim: 128
+  format: fvecs
+  prefix: sift
+
+index:
+  type: ivfpq
+  nlist: 4096
+  m: 128
+  nbits: 8
+  metric: L2
+
+execution:
+  search_param_configs:
+    - {nprobe: 8,  rerank_k: 50,  early_stop: false}
+    - {nprobe: 16, rerank_k: 100, early_stop: false}
+    - {nprobe: 32, rerank_k: 200, early_stop: false}
+    - {nprobe: 64, rerank_k: 400, early_stop: false}
+    - {nprobe: 128, rerank_k: 800, early_stop: false}
+
+pricing:
+  tiers: [0.001, 0.002, 0.005, 0.01, 0.02]
+  reward_mode: satisfaction_retention
+
+cost_model:
+  base_per_ms: 0.00005
+  fixed_overhead: 0.0001
+
+policies:
+  fixed:
+    z_index: 2      # nprobe=32 — 同质化固定套餐
+    p_index: 2      # $0.005
+    epsilon: 0.1
+  hetero_linucb:
+    alpha: 0.5
+    temperature: 0.4
+
+models:
+  difficulty: models/sift1m/difficulty_v1.onnx
+
+buyer:
+  version: hetero
+  best_dist_anchor: 48910.0
+  worst_dist_anchor: 55289.0
+  nprobe_recall:
+    8: 0.66
+    16: 0.79
+    32: 0.88
+    64: 0.93
+    128: 0.95
+
+shadow:
+  sample_rate: 0.0
+
+logging:
+  output_dir: logs
+  flush_every_n: 100
+
+experiment:
+  seed: 42
+  n_queries: 8000

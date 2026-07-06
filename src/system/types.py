@@ -15,7 +15,10 @@ class Query:
     k_t: int                   # number of neighbors requested
     filter_t: dict             # optional metadata filter
     sla_t: float               # latency budget in seconds (e.g. 0.050 = 50ms)
-    budget_t: float            # buyer's price ceiling in USD
+    budget_t: float            # buyer's expected price (soft anchor) in USD
+    persona_t: str = ""        # enterprise | budget | quality (hetero workload)
+    difficulty_bucket: str = ""  # easy | hard | medium
+    scenario_t: str = ""         # e.g. bargain_easy, fair_hard
 
     def to_dict(self):
         d = asdict(self)
@@ -80,5 +83,8 @@ class Trajectory:
             "R_t": self.outcome.R_t,
             "sla_violated": self.outcome.sla_violated,
             "market_sentiment": self.market_sentiment,
+            "persona_t": self.query.persona_t,
+            "difficulty_bucket": self.query.difficulty_bucket,
+            "scenario_t": self.query.scenario_t,
             "timestamp": self.timestamp,
         }

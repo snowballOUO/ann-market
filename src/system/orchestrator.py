@@ -13,6 +13,7 @@ Per-query flow:
 import time
 from src.system.types import Query, Outcome, Trajectory
 from src.system.context_cache import ContextCache
+from src.pricing.reward import compute_reward
 
 
 class Orchestrator:
@@ -24,6 +25,7 @@ class Orchestrator:
         shadow_sampler,
         log_writer,
         context_cache: ContextCache = None,
+        reward_mode: str = "hard",
     ):
         self.difficulty = difficulty_estimator
         self.policy = policy_agent
@@ -31,6 +33,7 @@ class Orchestrator:
         self.shadow = shadow_sampler
         self.log = log_writer
         self.ctx = context_cache or ContextCache()
+        self.reward_mode = reward_mode
 
     def handle_query(self, query: Query, buyer, gt_ids=None) -> Outcome:
         t_decision = time.time()
@@ -58,8 +61,16 @@ class Orchestrator:
         A_t, S_t = buyer.respond(query, results, action.p_t, L_t, nprobe=nprobe,
                                   gt_ids=gt_ids)
 
-        # 7. Revenue
-        R_t = (action.p_t - C_t) if A_t else (-C_t)
+        # 7. Revenue (configurable reward shaping)
+        R_t = compute_reward(
+            action.p_t,
+            C_t,
+            A_t,
+            S_t,
+            mode=self.reward_mode,
+            accept_streak=getattr(buyer, "accept_streak", 0),
+            market_sentiment=getattr(buyer, "market_sentiment", 0.8),
+        )
 
         outcome = Outcome(
             results=results,

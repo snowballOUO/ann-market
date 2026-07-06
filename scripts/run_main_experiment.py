@@ -24,7 +24,7 @@ import numpy as np
 
 DATASETS = ["sift1m", "deep1m", "gist1m", "ag_news"]
 SEEDS = [42, 123, 456, 789, 101112]
-METHODS = ["fixed", "sla", "cost", "linucb", "naive_dqn", "qnet"]
+METHODS = ["fixed", "sla", "cost", "linucb", "naive_dqn", "naive_dr", "qnet"]
 
 
 def run(cmd: str, desc: str = "") -> int:
@@ -48,16 +48,18 @@ def get_latest_log_dir():
 
 
 def evaluate_policies(config: str, seed: int, dataset: str,
-                      qnet_model: str, naive_model: str) -> dict:
+                      qnet_model: str, naive_model: str,
+                      naive_dr_model: str = None) -> dict:
     """Run compare_bandit — output directly to terminal, read JSON result."""
     import json
     json_path = f"logs/_eval_{dataset}_seed{seed}.json"
+    ndr = f'--naive-dr-model {naive_dr_model}' if naive_dr_model else ''
     cmd = (
         f'python scripts/compare_bandit.py '
         f'--config {config} --n-queries 10000 --seed {seed} '
-        f'--policies fixed,sla,cost,linucb,naive_dqn,qnet '
+        f'--policies fixed,sla,cost,linucb,naive_dqn,naive_dr,qnet '
         f'--qnet-model {qnet_model} --naive-dqn-model {naive_model} '
-        f'--no-plot --results-json {json_path}'
+        f'{ndr} --no-plot --results-json {json_path}'
     )
     t0 = time.time()
     env = os.environ.copy()
@@ -94,11 +96,13 @@ def main():
         os.makedirs(model_dir, exist_ok=True)
         qnet_model = f"{model_dir}/qnet_distilled_v1.pt"
         naive_model = f"{model_dir}/qnet_naive_dqn_v1.pt"
+        naive_dr_model = f"{model_dir}/qnet_naive_dr_v1.pt"
 
         if not args.skip_train:
             # Step 1: LinUCB behavior logs
             rc = run(
-                f"python scripts/run_experiment.py --config {config} --policy linucb --n-queries 20000",
+                f"python scripts/run_experiment.py --config {config} --policy linucb --n-queries 20000 "
+                f"--linucb-alpha 1.0 --linucb-temperature 0.5",
                 f"[{ds}] Step 1: LinUCB behavior logs"
             )
             if rc != 0:
@@ -127,10 +131,16 @@ def main():
             if rc != 0:
                 print(f"  Naive DQN training failed, continuing with other methods")
 
+            # Step 4: Train Naive DR
+            rc = run(
+                f"python scripts/train_qnet.py --log-dir {log_dir} --no-ut --reward-mode ips --output {naive_dr_model}",
+                f"[{ds}] Step 4: Train Naive DR"
+            )
+
         # Step 4: Evaluate all seeds
         for seed in SEEDS:
             print(f"\n  [{ds}] Seed {seed} — evaluating all 6 policies...")
-            metrics = evaluate_policies(config, seed, ds, qnet_model, naive_model)
+            metrics = evaluate_policies(config, seed, ds, qnet_model, naive_model, naive_dr_model)
 
             for method in METHODS:
                 if method in metrics:

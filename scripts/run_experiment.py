@@ -68,6 +68,7 @@ def main():
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--log-dir", default=None)
     ap.add_argument("--qnet-model", default="models/qnet_distilled_v1.pt")
+    ap.add_argument("--naive-dqn-model", default=None)
     ap.add_argument("--qnet-temperature", type=float, default=0.03)
     ap.add_argument("--linucb-alpha", type=float, default=1.0)
     ap.add_argument("--linucb-temperature", type=float, default=0.5)
@@ -128,8 +129,9 @@ def main():
     elif args.policy == "cost":
         policy = CostBasedPolicy(z_cfgs, prices, cfg["cost_model"], margin=0.5, seed=seed)
     elif args.policy == "naive_dqn":
-        policy = NaiveDQNPolicy(z_cfgs, prices, model_path="models/qnet_naive_dqn_v1.pt",
-                                temperature=0.1)
+        model_path = args.naive_dqn_model or "models/qnet_naive_dqn_v1.pt"
+        policy = NaiveDQNPolicy(z_cfgs, prices, model_path=model_path,
+                                temperature=0.1, seed=seed)
     #
     execution = ExecutionAgent(index, cfg["cost_model"])
 

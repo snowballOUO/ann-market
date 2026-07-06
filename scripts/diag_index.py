@@ -9,8 +9,11 @@ from src.data.datasets import load_dataset
 def recall_at_k(approx_ids, gt_ids, k):
     if gt_ids is None or len(gt_ids) == 0:
         return None
-    inter = len(set(approx_ids[:k]) & set(gt_ids[:k]))
-    return inter / k
+    valid = [int(x) for x in gt_ids[:k] if x >= 0]
+    if len(valid) == 0:
+        return None
+    inter = len(set(int(x) for x in approx_ids[:k]) & set(valid))
+    return inter / len(valid)
 
 
 def main():
@@ -71,7 +74,8 @@ def main():
             latencies.append(time.perf_counter() - t0)
             if gt is not None:
                 r = recall_at_k(I[0], gt[i], k_default)
-                recalls.append(r)
+                if r is not None:
+                    recalls.append(r)
             distances.extend(D[0].tolist())
 
         avg_recall = np.mean(recalls) if recalls else float('nan')

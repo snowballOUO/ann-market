@@ -1,16 +1,9 @@
 dataset:
-    name: gist1m
-    path: data/gist1m
-    dim: 960
-    format: hdf5
-    file: gist-960-euclidean.hdf5
-
-index:
-    type: ivfpq
-    nlist: 4096
-    m: 480                  # 960 / 480 = 2 dims per sub-vector
-    nbits: 8
-    metric: L2
+  name: sift1m
+  path: data/sift1m
+  dim: 128
+  format: fvecs
+  prefix: sift
 
 execution:
   search_param_configs:
@@ -22,27 +15,37 @@ execution:
 
 pricing:
   tiers: [0.001, 0.002, 0.005, 0.01, 0.02]
+  reward_mode: hard
 
 cost_model:
   base_per_ms: 0.00005
   fixed_overhead: 0.0001
 
-models:
-  difficulty: models/gist1m/difficulty_v1.onnx
+policies:
+  fixed:
+    z_index: 2
+    p_index: 2
+    epsilon: 0.1
+  hetero_linucb:
+    alpha: 0.5
+    temperature: 0.4
 
-shadow:
-  sample_rate: 0.02
-  exact_search_k_multiplier: 1.0
+models:
+  difficulty: models/sift1m/difficulty_v1.onnx
 
 buyer:
-  best_dist_anchor: 0.6
-  worst_dist_anchor: 3.7
+  version: must_serve
+  best_dist_anchor: 48910.0
+  worst_dist_anchor: 55289.0
   nprobe_recall:
-    8: 0.51
-    16: 0.66
-    32: 0.77
-    64: 0.85
-    128: 0.90
+    8: 0.66
+    16: 0.79
+    32: 0.88
+    64: 0.93
+    128: 0.95
+
+shadow:
+  sample_rate: 0.0
 
 logging:
   output_dir: logs
@@ -50,5 +53,4 @@ logging:
 
 experiment:
   seed: 42
-  n_queries: 1000
-  output_dir: runs
+  n_queries: 5000

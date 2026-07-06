@@ -9,8 +9,8 @@ dataset:
 
 index:
     type: ivfpq
-    nlist: 2048
-    m: 24                   # 96 / 24 = 4 dims per sub-vector
+    nlist: 4096
+    m: 96                   # 96 / 96 = 1 dim per sub-vector (scalar quant)
     nbits: 8
     metric: L2
 
@@ -37,8 +37,14 @@ shadow:
   exact_search_k_multiplier: 1.0
 
 buyer:
-  best_dist_anchor: 0.3
-  worst_dist_anchor: 1.8
+  best_dist_anchor: 0.2
+  worst_dist_anchor: 0.9
+  nprobe_recall:
+    8: 0.83
+    16: 0.92
+    32: 0.96
+    64: 0.98
+    128: 0.99
 
 logging:
   output_dir: logs

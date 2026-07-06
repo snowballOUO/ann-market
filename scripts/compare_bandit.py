@@ -157,6 +157,7 @@ def main():
 
     if "fixed" in selected:
         print("\n=== FixedPolicy (W1) ===")
+        buyer.market_sentiment = 0.8  # reset market state per policy
         policy = FixedPolicy(z_configs, price_tiers,
                              default_z_index=2, default_p_index=2,
                              epsilon=0.1, seed=seed)
@@ -173,6 +174,7 @@ def main():
 
     if "linucb" in selected:
         print("\n=== LinUCB (W3) ===")
+        buyer.market_sentiment = 0.8
         policy = LinUCBPolicy(z_configs, price_tiers,
                               alpha=args.alpha, temperature=args.temperature, seed=seed)
         log_writer = LogWriter(os.path.join(log_dir, "cmp_linucb"), flush_every_n=1000)
@@ -192,6 +194,7 @@ def main():
             print(f"\n⚠ Q-net model not found at {model_path}, skipping. Run train_qnet.py first.")
         else:
             print("\n=== Distilled Q-Net (W6) ===")
+            buyer.market_sentiment = 0.8
             policy = QLearningPolicy(z_configs, price_tiers,
                                      model_path=model_path, temperature=args.qnet_temp)
             log_writer = LogWriter(os.path.join(log_dir, "cmp_qnet"), flush_every_n=1000)
@@ -208,6 +211,7 @@ def main():
     if "sla" in selected:
         from src.agents.sla_heuristic_policy import SLAHeuristicPolicy
         print("\n=== SLA Heuristic ===")
+        buyer.market_sentiment = 0.8
         policy = SLAHeuristicPolicy(z_configs, price_tiers, seed=seed)
         log_writer = LogWriter(os.path.join(log_dir, "cmp_sla"), flush_every_n=1000)
         shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
@@ -223,6 +227,7 @@ def main():
     if "cost" in selected:
         from src.agents.cost_based_policy import CostBasedPolicy
         print("\n=== Cost-Based ===")
+        buyer.market_sentiment = 0.8
         policy = CostBasedPolicy(z_configs, price_tiers, cfg["cost_model"],
                                   margin=args.margin, seed=seed)
         log_writer = LogWriter(os.path.join(log_dir, "cmp_cost"), flush_every_n=1000)
@@ -243,8 +248,9 @@ def main():
         else:
             from src.agents.naive_dqn_policy import NaiveDQNPolicy
             print("\n=== Naive DQN (No Deconfounding) ===")
+            buyer.market_sentiment = 0.8
             policy = NaiveDQNPolicy(z_configs, price_tiers, model_path=model_path,
-                                    temperature=args.qnet_temp)
+                                    temperature=args.qnet_temp, seed=seed)
             log_writer = LogWriter(os.path.join(log_dir, "cmp_naive_dqn"), flush_every_n=1000)
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)
@@ -263,8 +269,9 @@ def main():
         else:
             from src.agents.naive_dqn_policy import NaiveDQNPolicy
             print("\n=== Naive DR (No U_t, IPS) ===")
+            buyer.market_sentiment = 0.8
             policy = NaiveDQNPolicy(z_configs, price_tiers, model_path=model_path,
-                                    temperature=args.qnet_temp)
+                                    temperature=args.qnet_temp, seed=seed)
             log_writer = LogWriter(os.path.join(log_dir, "cmp_naive_dr"), flush_every_n=1000)
             shadow = ShadowSampler(xb, cfg["shadow"]["sample_rate"],
                                    max_workers=2, on_recall_computed=log_writer.record_recall, seed=seed)

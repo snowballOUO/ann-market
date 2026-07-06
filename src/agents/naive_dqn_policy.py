@@ -18,11 +18,13 @@ class NaiveDQNPolicy:
         price_tiers: list[float],
         model_path: str = "models/qnet_naive_dqn_v1.pt",
         temperature: float = 0.1,
+        seed: int = 42,
     ):
         self.configs = search_param_configs
         self.prices = price_tiers
         self.n_actions = len(self.configs) * len(self.prices)
         self.temperature = temperature
+        self.rng = np.random.default_rng(seed)
         self.model = torch.jit.load(model_path)
         self.model.eval()
         self.version = "naive-dqn-v1"
@@ -41,7 +43,7 @@ class NaiveDQNPolicy:
         probs = F.softmax(q_values / self.temperature, dim=0).numpy()
         probs = np.clip(probs, a_min=1e-5, a_max=1.0)
         probs = probs / probs.sum()
-        action_idx = np.random.choice(self.n_actions, p=probs)
+        action_idx = self.rng.choice(self.n_actions, p=probs)
         propensity = float(probs[action_idx])
         z_idx = action_idx // len(self.prices)
         p_idx = action_idx % len(self.prices)
