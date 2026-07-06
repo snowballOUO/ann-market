@@ -1,336 +1,175 @@
-# ANN Marketplace — Week 1 prototype
+# ANN Marketplace — Adaptive Vector Retrieval & Pricing System
 
-Causal Bellman ANN serving marketplace (SIGMOD prototype, Week 1 skeleton).
+Per-query adaptive retrieval configuration and pricing for vector database services. Jointly optimizes nprobe (search depth) and price under heterogeneous buyer constraints, with offline safe learning via Doubly Robust estimation and online contextual bandits.
 
-This is the working code for the **Week 1 milestone**: a runnable end-to-end
-pipeline with all five agents wired up, using a deterministic fixed policy
-and a stub buyer. No learning yet — that comes in Week 3-5. The goal of
-Week 1 is to prove the plumbing works and the trajectory log has all the
-fields downstream learning will need.
+---
 
-## What's in this repo
+## Architecture Overview
 
 ```
-ann-marketplace/
-├── configs/base.yaml           # all knobs in one place
-├── src/
-│   ├── agents/
-│   │   ├── difficulty_estimator.py  # heuristic U_t
-│   │   ├── policy_agent.py          # FixedPolicy with eps-exploration
-│   │   ├── execution_agent.py       # FAISS wrapper
-│   │   ├── shadow_sampler.py        # async exact-recall sampler
-│   │   └── learner_agent.py         # stub for now (Week 5 work)
-│   ├── data/
-│   │   ├── datasets.py              # SIFT1M .fvecs loader
-│   │   └── buyer_stub.py            # Week 1 placeholder buyer
-│   └── system/
-│       ├── types.py                 # Query, Action, Outcome, Trajectory
-│       ├── context_cache.py
-│       ├── log_writer.py            # parquet append-only log
-│       └── orchestrator.py          # ties everything together
-├── scripts/
-│   ├── download_sift1m.sh
-│   ├── build_index.py               # one-time IVF-PQ build
-│   └── run_experiment.py            # main entry point
-└── tests/
-    ├── test_propensity.py           # critical invariant
-    ├── test_shadow_unbiased.py      # critical invariant
-    ├── test_latency.py              # 2ms budget check
-    └── test_end_to_end.py           # full pipeline smoke
+Query arrives
+    |
+    v
+DifficultyEstimator (MLP ONNX, p99 <0.5ms)
+    |
+    v
+ContextCache (100-query sliding window)
+    |
+    v
+PolicyAgent ──┬── LinUCB (6-dim, online bandit)
+              ├── Q-Net (7-dim, offline distilled)
+              ├── HeteroLinUCB (10-dim, persona-encoded)
+              └── FeasibleFixedPolicy (constrained baseline)
+    |
+    v
+Feasible Action Filter (cost <= budget, price >= cost)
+    |
+    v
+ExecutionAgent (FAISS IVF-PQ, 5 nprobe levels)
+    |
+    v
+ShadowSampler (2% async exact recall)
+    |
+    v
+BuyerSimulator (6 switchable versions)
+    |
+    v
+Reward = satisfaction x (price - cost)
 ```
 
 ---
 
-## 1. Environment setup
+## Two Experiment Pipelines
 
-### 1.1 OS support
+### Pipeline A: Original (Homogeneous Market)
 
-Tested on Linux and macOS. On **Windows**, use WSL2 — `faiss-cpu` wheels
-for native Windows are unreliable. Inside WSL2 Ubuntu, everything below
-just works.
+- **Entry**: `scripts/run_main_experiment.py --dataset <name>`
+- **Buyer**: `original` — GT real recall + 3-type Utility + Market Sentiment
+- **Strategies**: FixedPolicy, SLA Heuristic, Cost-Based, LinUCB, Naive DQN (no U_t), Naive DR (IPS), Q-Net (ours)
+- **Features**: GT recall computation, Shadow quality adjustment, DR offline validation, Q-Net distillation
+- **Goal**: Prove adaptive > fixed in standard random-workload settings
 
-### 1.2 System requirements
+### Pipeline B: V2 Heterogeneous (Persona-Encoded Market)
 
-* Python 3.11 or newer
-* ~2 GB free disk for SIFT1M + index
-* 4+ GB RAM (SIFT1M in float32 = ~500 MB, index another ~200 MB)
-* No GPU needed for Week 1
-
-### 1.3 Create virtualenv and install
-
-```bash
-cd ann-marketplace
-
-# Use whatever Python venv tool you prefer. Plain venv:
-python3.11 -m venv .venv
-source .venv/bin/activate
-
-# Install in editable mode so 'import src.xxx' works
-pip install --upgrade pip
-pip install -e ".[dev]"
-```
-
-Sanity check:
-
-```bash
-python -c "import faiss, torch, numpy, pyarrow; print('ok')"
-```
-
-If `faiss-cpu` install fails on macOS, install via conda instead:
-
-```bash
-conda install -c pytorch faiss-cpu
-```
+- **Entry**: `scripts/run_hetero_experiment.py` / `scripts/run_scenario_experiment.py`
+- **Buyer**: `hetero` (persona-locked + continuous satisfaction) / `must_serve` (never reject)
+- **Strategies**: FeasibleFixedPolicy, HeteroLinUCB (10-dim with persona one-hot)
+- **Workloads**: PersonaWorkload (Enterprise/Budget/Quality), ScenarioWorkload (S1-S6: mindset x difficulty)
+- **Goal**: Prove adaptive >> fixed when buyer heterogeneity is explicitly modeled
 
 ---
 
-## 2. Get the data
+## Quick Start
 
 ```bash
-chmod +x scripts/download_sift1m.sh
-bash scripts/download_sift1m.sh data/sift1m
-```
-
-This downloads ~500 MB and extracts four files into `data/sift1m/`:
-
-```
-sift_base.fvecs        (1M base vectors)
-sift_query.fvecs       (10K query vectors)
-sift_learn.fvecs       (100K training vectors)
-sift_groundtruth.ivecs (10K * 100 ground-truth nearest neighbours)
-```
-
-If the FTP mirror is slow, the script falls back to the HTTP mirror. If
-both fail, manually download from
-http://corpus-texmex.irisa.fr/ and place `sift.tar.gz` inside
-`data/sift1m/`, then re-run the script.
-
-Sanity check the load:
-
-```bash
-python -c "from src.data.datasets import load_sift1m; \
-xb,xq,xt,gt = load_sift1m('data/sift1m'); \
-print(xb.shape, xq.shape, xt.shape, gt.shape)"
-# expected:
-# (1000000, 128) (10000, 128) (100000, 128) (10000, 100)
-```
-
----
-
-## 3. Build the index (one-time, ~1 minute)
-
-```bash
-python scripts/build_index.py --config configs/base.yaml
-```
-
-Output (abridged):
-
-```
-Building IVF-PQ index: nlist=4096, m=16, nbits=8
-  training on 100000 vectors...
-  training took 25.3s
-  adding 1000000 vectors...
-  add took 18.1s
-Wrote index to data/sift1m/index_ivfpq.faiss (15.8 MB)
-
-Sanity check with nprobe=16, 10 queries:
-  recall@10: 0.90
-```
-
-If recall@10 is below 0.5, something is wrong with the index — usually a
-dim mismatch. Re-check `configs/base.yaml` against the loaded data shapes.
-
----
-
-## 4. Run the Week 1 experiment
-
-### 4.1 Smoke test (10 queries, ~2 seconds)
-
-```bash
-python scripts/run_experiment.py --config configs/base.yaml --n-queries 10
-```
-
-Expected tail:
-
-```
-Done in 0.X s (XXX qps)
-  accepts: 4/10 (40.0%)
-  revenue: $0.0XYZ
-
-============================================================
-Learner summary
-============================================================
-  n_trajectories: 10
-  n_shadow_sampled: 0 or 1
-  mean_recall_when_sampled: 0.X or None
-  mean_latency_ms: X.X
-  p99_latency_ms: X.X
-  accept_rate: 0.4
-  total_revenue: 0.0XYZ
-  mean_propensity: 0.91
-  min_propensity: 0.0X
-  policy_versions: ['fixed-v1-eps0.1']
-```
-
-### 4.2 Full Week 1 run (1000 queries)
-
-```bash
-python scripts/run_experiment.py --config configs/base.yaml --n-queries 1000
-```
-
-Expected:
-* ~5-15 seconds wall-clock
-* ~20 queries shadow-sampled (2% of 1000)
-* mean recall when shadow-sampled around 0.85-0.95
-* `min_propensity` should be > 0 (this is the killer invariant)
-
-### 4.3 Inspect the trajectory log
-
-```bash
-python -c "
-import pandas as pd, glob
-files = sorted(glob.glob('logs/run_*/run_*.parquet'))
-df = pd.concat([pd.read_parquet(f) for f in files[-5:]])
-print(df.head())
-print()
-print(df.describe())
-"
-```
-
-You should see columns `query_id, U_t, z_nprobe, p_t, propensity, L_t, C_t, Q_t, A_t, S_t, R_t`.
-
----
-
-## 5. Run the tests
-
-```bash
-pytest tests/ -v
-```
-
-Critical tests:
-
-| Test                              | What it guards against                                  |
-|-----------------------------------|---------------------------------------------------------|
-| `test_propensity.py`              | Zero or invalid propensity (would break off-policy RL) |
-| `test_shadow_unbiased.py`         | Shadow recall computation correctness                  |
-| `test_latency.py`                 | Decision-path latency budget regression                |
-| `test_end_to_end.py`              | Full pipeline integration                              |
-
-To see latency numbers printed:
-
-```bash
-pytest tests/test_latency.py -s
-```
-
-To run just one test:
-
-```bash
-pytest tests/test_propensity.py::test_fixed_policy_propensity_always_positive -v
-```
-
----
-
-## 6. Debugging cookbook
-
-### 6.1 "No trajectories logged yet"
-
-The `LogWriter` flushes every `flush_every_n` records (default 100). For
-small runs (< 100 queries), records sit in the buffer until `close()` is
-called. The experiment runner calls `close()` at the end, so this should
-not happen during normal use. If you see it after a full run, check that
-your run actually finished — Python's KeyboardInterrupt does not call
-`close()`.
-
-### 6.2 Recall is suspiciously low
-
-* Check `nprobe` in `configs/base.yaml` — try increasing the default
-  `search_param_configs` entries.
-* Verify `nlist` is sane for your data size (~4*sqrt(N) is a good rule
-  of thumb).
-* Run `scripts/build_index.py` and check the sanity-check recall — if
-  it's below 0.7, the index itself is bad.
-
-### 6.3 Latency tests fail on slow laptop
-
-The hard latency budgets are for production hardware. On a 2018 MacBook
-the policy agent might exceed 2ms p99 for the first few iterations due
-to JIT warm-up. The test already does warm-up; if it still fails, bump
-the budget temporarily and file a TODO. Don't silently weaken the
-production target.
-
-### 6.4 Profile a slow run
-
-```bash
-pip install py-spy
-py-spy record -o profile.svg -- python scripts/run_experiment.py --n-queries 500
-# Open profile.svg in a browser
-```
-
-For finer-grained Python-level profiling:
-
-```bash
-pip install scalene
-scalene scripts/run_experiment.py --cli-only
-```
-
-### 6.5 Shadow sampler not catching up
-
-If a long run finishes but `shadow.drain()` times out, increase the timeout
-in `run_experiment.py` or bump `max_workers` in `ShadowSampler.__init__`.
-The default of 2 workers is conservative to avoid contending with serving.
-
-### 6.6 "FileNotFoundError: index_ivfpq.faiss"
-
-Run `python scripts/build_index.py` first.
-
-### 6.7 Verify propensity invariant manually
-
-```bash
-python -c "
-import pandas as pd, glob
-df = pd.concat([pd.read_parquet(f) for f in sorted(glob.glob('logs/run_*/run_*.parquet'))])
-print('zero propensities:', (df.propensity == 0).sum())
-print('min propensity:', df.propensity.min())
-print('max propensity:', df.propensity.max())
-"
-```
-
-If `zero propensities > 0`, stop immediately and audit the policy. This
-silently corrupts all downstream off-policy learning.
-
----
-
-## 7. What changes in Week 2 and after
-
-This skeleton is intentionally feature-thin. Upcoming work:
-
-* **Week 2** — replace `buyer_stub.py` with a calibrated `buyer_simulator.py`
-  (the most important deliverable, since all experiments depend on buyer
-  behaviour fidelity).
-* **Week 3** — replace `FixedPolicy` with a `ContextualBandit` policy.
-* **Week 5** — add `LearnerAgent.causal_dr_bellman_loss()` and a real
-  `QNet` in `src/models/`. Begin off-policy learning loop.
-* **Week 7** — full main experiment with baselines.
-
-The interfaces (Query, Action, Trajectory, propensity field) will not
-change. Code written against them now is forward-compatible.
-
----
-
-## 8. Quick reference: full setup from zero
-
-```bash
-git clone <repo>  # or just unzip
-cd ann-marketplace
-
+# Setup
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
+# Data (SIFT1M, ~600MB)
 bash scripts/download_sift1m.sh data/sift1m
-python scripts/build_index.py --config configs/base.yaml
+python scripts/build_index.py --config configs/sift1m.yaml
+python scripts/pretrain_difficulty.py --config configs/sift1m.yaml
 
-pytest tests/ -v
-python scripts/run_experiment.py --config configs/base.yaml --n-queries 1000
+# Run Pipeline A (7 strategies, 5 seeds)
+python scripts/run_main_experiment.py --dataset sift1m
+
+# Run Pipeline B (HeteroLinUCB vs Fixed)
+python scripts/switch_buyer_version.py hetero
+python scripts/run_hetero_experiment.py --config configs/sift1m_hetero.yaml \
+    --n-queries 10000 --seeds 42,123,456
+
+# Scenario experiment (S1-S6, must-serve, multi-process)
+python scripts/switch_buyer_version.py must_serve
+python scripts/run_scenario_experiment.py --config configs/sift1m_scenario.yaml \
+    --scenarios all --seeds 42,123,456 --n-queries 5000
 ```
 
-Total time on a modern laptop: ~10 minutes including download.
+---
+
+## Buyer Versions
+
+Switch via `python scripts/switch_buyer_version.py <name>` or `BUYER_VERSION=<name>` env var:
+
+| Version | Behavior | Accept | Use Case |
+|---------|----------|:------:|------|
+| `baseline` | Original bug: ignores query.sla/budget | ~98% | Reproduce legacy results |
+| `fixed` | Hard reject if price > budget or latency > sla | Varies | Constraint validation |
+| `soft` | budget/sla as utility anchors (recommended) | Varies | General experiments |
+| `hetero` | Persona-locked + continuous satisfaction | Varies | Heterogeneous market |
+| `must_serve` | Never reject (SLA-guaranteed cloud service) | 100% | Scenario S1-S6 |
+| `original` | GT real recall + 3-type buyer + sentiment | Varies | Pipeline A default |
+
+---
+
+## Key Experiment Results (SIFT1M)
+
+### Pipeline A: 7-strategy comparison (5 seeds)
+
+| Method | Revenue | vs Fixed | Accept |
+|--------|---------|:---:|------|
+| SLA Heuristic | $45.99 | -3.2% | 99.3% |
+| Cost-Based | $47.45 | -0.2% | 99.4% |
+| FixedPolicy | $47.53 | — | 97.7% |
+| LinUCB (online) | $49.38 | +3.9% | 83.7% |
+| Naive DR (IPS) | $51.95 | +9.3% | 84.2% |
+| Naive DQN (no U_t) | $52.04 | +9.5% | 84.0% |
+| **Q-Net (ours)** | **$52.69** | **+10.9%** | 83.8% |
+
+### Pipeline B: HeteroLinUCB vs Fixed (3 seeds)
+
+| Experiment | Fixed | HeteroLinUCB | Gain |
+|-----------|-------|-------------|:---:|
+| Hetero market | $26.70 | $29.89 | +12.0% |
+| S1-S6 scenarios (avg) | $24.30 | $36.10 | +49% |
+
+---
+
+## Key Files
+
+```
+src/
+  agents/         — Policy agents (LinUCB, Q-Net, HeteroLinUCB, FeasibleFixed, Naive)
+  causal/         — DR estimator, LightGBM reward model
+  data/           — Dataset loaders, buyer versions, workload generators
+  models/         — Q-Net architecture + distillation
+  pricing/        — Feasible actions, state features, reward shaping
+  system/         — Orchestrator, types, context cache, log writer
+scripts/
+  run_main_experiment.py    — Pipeline A: 7-strategy comparison
+  run_hetero_experiment.py  — Pipeline B: hetero market
+  run_scenario_experiment.py— Pipeline B: S1-S6 scenarios (multi-process)
+  compare_bandit.py         — Standalone policy comparison
+  train_qnet.py             — Q-Net offline training + distillation
+  validate_dr.py            — DR offline validation
+  build_index.py            — FAISS IVF-PQ index construction
+  pretrain_difficulty.py    — MLP difficulty estimator training
+  switch_buyer_version.py   — Buyer version switching
+configs/
+  sift1m.yaml               — Pipeline A config (fvecs format)
+  sift1m_hetero.yaml        — Pipeline B hetero config
+  sift1m_scenario.yaml      — Pipeline B scenario config
+  deep1m.yaml / ag_news.yaml / gist1m.yaml
+```
+
+---
+
+## Environment
+
+```
+Python 3.11+
+faiss-cpu, torch, numpy, pandas, pyarrow, scikit-learn, lightgbm
+onnx, onnxruntime, matplotlib, tqdm, h5py, pytest
+```
+
+## Datasets
+
+Four standard ANN-benchmarks datasets (download separately):
+- **SIFT1M** (128-dim, 1M vectors, image descriptors)
+- **DEEP1M** (96-dim, 1M vectors, angular distance)
+- **GIST1M** (960-dim, 1M vectors, scene descriptors)
+- **AG_NEWS** (384-dim, 120K vectors, text embeddings)
+
+---
+
+*Branch: v2-integrated | Builds on clean-final with V2 heterogeneous marketplace extensions*
