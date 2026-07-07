@@ -1,0 +1,64 @@
+# Heterogeneous marketplace experiment config — AG_NEWS
+dataset:
+  name: ag_news
+  path: data/ag_news
+  dim: 384
+  format: hdf5
+  file: ag_news-384-euclidean.hdf5
+
+index:
+  type: ivfpq
+  nlist: 4096
+  m: 384
+  nbits: 8
+  metric: L2
+
+execution:
+  search_param_configs:
+    - {nprobe: 8,  rerank_k: 50,  early_stop: false}
+    - {nprobe: 16, rerank_k: 100, early_stop: false}
+    - {nprobe: 32, rerank_k: 200, early_stop: false}
+    - {nprobe: 64, rerank_k: 400, early_stop: false}
+    - {nprobe: 128, rerank_k: 800, early_stop: false}
+
+pricing:
+  tiers: [0.001, 0.002, 0.005, 0.01, 0.02]
+  reward_mode: satisfaction_retention
+
+cost_model:
+  base_per_ms: 0.00005
+  fixed_overhead: 0.0001
+
+policies:
+  fixed:
+    z_index: 2
+    p_index: 2
+    epsilon: 0.1
+  hetero_linucb:
+    alpha: 0.5
+    temperature: 0.4
+
+models:
+  difficulty: models/ag_news/difficulty_v1.onnx
+
+buyer:
+  version: hetero
+  best_dist_anchor: 0.3
+  worst_dist_anchor: 1.3
+  nprobe_recall:
+    8: 0.86
+    16: 0.91
+    32: 0.94
+    64: 0.96
+    128: 0.97
+
+shadow:
+  sample_rate: 0.0
+
+logging:
+  output_dir: logs
+  flush_every_n: 100
+
+experiment:
+  seed: 42
+  n_queries: 7600

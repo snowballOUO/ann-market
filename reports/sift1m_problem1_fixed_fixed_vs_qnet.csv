@@ -1,0 +1,11 @@
+dataset,buyer_version,method,seed,revenue,accept_rate,avg_price,sla_violation_rate,avg_cost
+sift1m,problem1_fixed,fixed,42,43.31407,0.9091,0.005294,0.0033,0.00022529
+sift1m,problem1_fixed,qnet,42,35.047004,0.704,0.00794,0.0035,0.0002793
+sift1m,problem1_fixed,fixed,123,43.227343,0.9117,0.005253,0.0041,0.00023517
+sift1m,problem1_fixed,qnet,123,35.503003,0.7078,0.007914,0.0055,0.0002829
+sift1m,problem1_fixed,fixed,456,43.540923,0.9149,0.005242,0.0036,0.00023141
+sift1m,problem1_fixed,qnet,456,35.887038,0.7189,0.007809,0.005,0.0002805
+sift1m,problem1_fixed,fixed,789,43.927478,0.921,0.005238,0.0027,0.00022545
+sift1m,problem1_fixed,qnet,789,34.938363,0.7144,0.007838,0.0051,0.00028226
+sift1m,problem1_fixed,fixed,101112,43.737278,0.9165,0.005264,0.003,0.00022667
+sift1m,problem1_fixed,qnet,101112,36.370095,0.7172,0.00791,0.0053,0.00028909
